@@ -285,14 +285,6 @@ export async function subirFotoFalla(formData: FormData): Promise<SubirFotoResul
 
 // ── Server action: crear ingreso (flow manual o IA) ────────
 
-const FALLA_CATEGORIAS = [
-  'mancha',
-  'agujero',
-  'color_disparejo',
-  'tono_diferente',
-  'rotura_tejido',
-  'otro',
-] as const
 
 export async function crearIngreso(input: IngresoInput) {
   const supabase = await createClient()
@@ -338,7 +330,7 @@ export async function crearIngreso(input: IngresoInput) {
       r.ubicacion = valida.codigo
     }
     if (r.segunda) {
-      if (!r.falla_categoria || !FALLA_CATEGORIAS.includes(r.falla_categoria as typeof FALLA_CATEGORIAS[number])) {
+      if (!r.falla_categoria?.trim()) {
         return {
           error: `El rollo "${r.numero_pieza.trim()}" está marcado como segunda pero falta la categoría de falla.`,
         }

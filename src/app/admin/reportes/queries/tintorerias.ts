@@ -10,23 +10,25 @@ import {
 //  "¿Con cuál sigo trabajando?"
 // ════════════════════════════════════════════════════════════
 
-// Categorías de falla y su atribución (teñido vs tejeduría).
-export const FALLAS_TEÑIDO = ['mancha', 'color_disparejo', 'tono_diferente'] as const
-export const FALLAS_TEJEDURIA = ['agujero', 'rotura_tejido'] as const
+// Categorías de falla base (teñido vs tejeduría). Normalizado a Title Case
+// para coincidir con los valores almacenados en rollos.falla_categoria desde
+// la migración 064 en adelante.
+export const FALLAS_TEÑIDO = ['Mancha', 'Color disparejo', 'Tono diferente'] as const
+export const FALLAS_TEJEDURIA = ['Agujero', 'Rotura de tejido'] as const
 export const FALLA_CATEGORIAS = [
   ...FALLAS_TEÑIDO,
   ...FALLAS_TEJEDURIA,
-  'otro',
+  'Otro',
 ] as const
 export type FallaCategoria = (typeof FALLA_CATEGORIAS)[number]
 
 export const FALLA_LABEL: Record<FallaCategoria, string> = {
-  mancha: 'Mancha',
-  color_disparejo: 'Color disparejo',
-  tono_diferente: 'Tono diferente',
-  agujero: 'Agujero',
-  rotura_tejido: 'Rotura de tejido',
-  otro: 'Otro',
+  Mancha: 'Mancha',
+  'Color disparejo': 'Color disparejo',
+  'Tono diferente': 'Tono diferente',
+  Agujero: 'Agujero',
+  'Rotura de tejido': 'Rotura de tejido',
+  Otro: 'Otro',
 }
 
 export type ScorecardRow = {
@@ -70,12 +72,12 @@ type Agg = {
 
 function nuevaFallas(): Record<FallaCategoria, number> {
   return {
-    mancha: 0,
-    color_disparejo: 0,
-    tono_diferente: 0,
-    agujero: 0,
-    rotura_tejido: 0,
-    otro: 0,
+    Mancha: 0,
+    'Color disparejo': 0,
+    'Tono diferente': 0,
+    Agujero: 0,
+    'Rotura de tejido': 0,
+    Otro: 0,
   }
 }
 
@@ -165,9 +167,9 @@ export async function reporteTintoreriaPerformance(
 
     if (r.estado === 'segunda') {
       acc.rollosSegunda += 1
-      const cat = (r.falla_categoria ?? 'otro') as FallaCategoria
+      const cat = (r.falla_categoria ?? 'Otro') as FallaCategoria
       if (cat in acc.fallas) acc.fallas[cat] += 1
-      else acc.fallas.otro += 1
+      else acc.fallas['Otro'] += 1
     }
 
     // Diferencia declarado vs propio: solo donde hay kilos_propios (no asumir 0).

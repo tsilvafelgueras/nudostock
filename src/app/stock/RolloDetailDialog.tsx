@@ -19,10 +19,8 @@ import {
 } from './actions'
 import { actualizarOtIngreso } from '@/app/ingresos/otActions'
 import {
-  FALLA_CATEGORIAS,
-  FALLA_CATEGORIA_LABEL,
   ESTADOS_EDITABLES,
-  type FallaCategoria,
+  type TipoFallaOption,
   type EstadoEditable,
 } from './constants'
 import {
@@ -50,6 +48,7 @@ export default function RolloDetailDialog({
   ubicaciones,
   articulos,
   articuloColores,
+  tiposFalla = [],
 }: {
   rollo: StockRollo
   role: StockRole
@@ -58,6 +57,7 @@ export default function RolloDetailDialog({
   ubicaciones: UbicacionOption[]
   articulos: { id: string; nombre: string }[]
   articuloColores: Record<string, { id: string; nombre: string }[]>
+  tiposFalla?: TipoFallaOption[]
 }) {
   const [mode, setMode] = useState<
     'view' | 'mover' | 'baja' | 'eliminar' | 'segunda' | 'confirmar' | 'editar' | 'devolver' | 'reactivar'
@@ -76,7 +76,7 @@ export default function RolloDetailDialog({
   const [devolverMotivo, setDevolverMotivo] = useState('')
 
   // Formulario de "segunda"
-  const [fallaCategoria, setFallaCategoria] = useState<FallaCategoria | ''>('')
+  const [fallaCategoria, setFallaCategoria] = useState('')
   const [fallaDescripcion, setFallaDescripcion] = useState('')
   const [fallaArchivos, setFallaArchivos] = useState<File[]>([])
   const [subiendoIdx, setSubiendoIdx] = useState<number | null>(null)
@@ -624,9 +624,7 @@ export default function RolloDetailDialog({
                 <p className="font-medium text-amber-900">Falla registrada</p>
                 {rollo.falla_categoria && (
                   <span className="rounded-full bg-amber-200 text-amber-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-                    {FALLA_CATEGORIA_LABEL[
-                      rollo.falla_categoria as FallaCategoria
-                    ] ?? rollo.falla_categoria}
+                    {rollo.falla_categoria}
                   </span>
                 )}
               </div>
@@ -1060,16 +1058,14 @@ export default function RolloDetailDialog({
                 </label>
                 <select
                   value={fallaCategoria}
-                  onChange={(e) =>
-                    setFallaCategoria(e.target.value as FallaCategoria | '')
-                  }
+                  onChange={(e) => setFallaCategoria(e.target.value)}
                   className="w-full rounded-md border px-3 py-2 text-sm bg-white"
                   autoFocus
                 >
                   <option value="">Seleccionar...</option>
-                  {FALLA_CATEGORIAS.map((c) => (
-                    <option key={c} value={c}>
-                      {FALLA_CATEGORIA_LABEL[c]}
+                  {tiposFalla.map((t) => (
+                    <option key={t.id} value={t.nombre}>
+                      {t.nombre}
                     </option>
                   ))}
                 </select>

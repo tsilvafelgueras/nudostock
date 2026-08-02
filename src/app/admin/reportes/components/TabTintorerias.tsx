@@ -92,7 +92,7 @@ export default function TabTintorerias({
           title="Fallas por tintorería"
           description="Rollos en segunda por categoría. Tonos naranja = teñido (mancha, color disparejo, tono); rojo = tejeduría (agujero, rotura)."
           isEmpty={fallas.every((f) =>
-            (['mancha', 'color_disparejo', 'tono_diferente', 'agujero', 'rotura_tejido', 'otro'] as const).every(
+            (['Mancha', 'Color disparejo', 'Tono diferente', 'Agujero', 'Rotura de tejido', 'Otro'] as const).every(
               (c) => f[c] === 0
             )
           )}

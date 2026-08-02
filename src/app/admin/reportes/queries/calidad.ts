@@ -50,8 +50,8 @@ export async function reporteFallasPorCategoria(
 
   const counts = new Map<FallaCategoria, number>()
   for (const r of (data ?? []) as { falla_categoria: string | null }[]) {
-    const cat = (r.falla_categoria ?? 'otro') as FallaCategoria
-    const key = FALLA_CATEGORIAS.includes(cat) ? cat : 'otro'
+    const cat = (r.falla_categoria ?? 'Otro') as FallaCategoria
+    const key = FALLA_CATEGORIAS.includes(cat) ? cat : 'Otro'
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
 

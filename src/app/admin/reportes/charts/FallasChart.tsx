@@ -21,12 +21,12 @@ import {
 // fallas de tejeduría, gris = otro. Así se separan visualmente los dos
 // orígenes de la falla.
 const FALLA_COLOR: Record<FallaCategoria, string> = {
-  mancha: '#f59e0b',
-  color_disparejo: '#fbbf24',
-  tono_diferente: '#fcd34d',
-  agujero: '#ef4444',
-  rotura_tejido: '#f87171',
-  otro: '#94a3b8',
+  Mancha: '#f59e0b',
+  'Color disparejo': '#fbbf24',
+  'Tono diferente': '#fcd34d',
+  Agujero: '#ef4444',
+  'Rotura de tejido': '#f87171',
+  Otro: '#94a3b8',
 }
 
 export default function FallasChart({

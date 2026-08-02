@@ -7,6 +7,7 @@ import type {
   StockReservaBanner,
   StockSummaryGroup,
 } from '@/lib/stockResumen'
+import type { TipoFallaOption } from './constants'
 
 export type {
   StockReservaBanner,
@@ -67,6 +68,7 @@ export default function StockList({
   ubicaciones,
   articulos,
   articuloColores,
+  tiposFalla = [],
 }: {
   rollos: StockRollo[]
   role: StockRole
@@ -75,6 +77,7 @@ export default function StockList({
   ubicaciones: UbicacionOption[]
   articulos: { id: string; nombre: string }[]
   articuloColores: Record<string, { id: string; nombre: string }[]>
+  tiposFalla?: TipoFallaOption[]
 }) {
   const [selected, setSelected] = useState<StockRollo | null>(null)
   const [selectedIntent, setSelectedIntent] = useState<'view' | 'editar'>(
@@ -357,6 +360,7 @@ export default function StockList({
           ubicaciones={ubicaciones}
           articulos={articulos}
           articuloColores={articuloColores}
+          tiposFalla={tiposFalla}
           onClose={() => setSelected(null)}
         />
       )}
@@ -388,7 +392,10 @@ function ResumenStock({ grupos }: { grupos: StockSummaryGroup[] }) {
             <p className="text-sm text-muted-foreground">{g.color}</p>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
               <span>{g.rollos} rollos</span>
-              <span>{g.kilos.toFixed(2)} kg total</span>
+              <span className="font-medium text-foreground">{g.kilos_libre.toFixed(2)} kg disp.</span>
+              {g.kilos_reservado > 0 && (
+                <span>{g.kilos_reservado.toFixed(2)} kg res.</span>
+              )}
               <span>{g.reservado} reservados</span>
               <span>{g.libre} libres</span>
             </div>
@@ -414,7 +421,7 @@ function ResumenStock({ grupos }: { grupos: StockSummaryGroup[] }) {
                 <th className="px-3 py-3 font-medium">Artículo</th>
                 <th className="px-3 py-3 font-medium">Color</th>
                 <th className="px-3 py-3 font-medium">Rollos</th>
-                <th className="px-3 py-3 font-medium">Kg total</th>
+                <th className="px-3 py-3 font-medium">Kg disponibles</th>
                 <th className="px-3 py-3 font-medium">Reservado</th>
                 <th className="px-3 py-3 font-medium">Libre</th>
                 <th className="px-3 py-3 font-medium">Partidas</th>
@@ -427,7 +434,12 @@ function ResumenStock({ grupos }: { grupos: StockSummaryGroup[] }) {
                   <td className="px-3 py-3">{g.color}</td>
                   <td className="px-3 py-3 tabular-nums">{g.rollos}</td>
                   <td className="px-3 py-3 tabular-nums">
-                    {g.kilos.toFixed(2)} kg
+                    <span>{g.kilos_libre.toFixed(2)} kg</span>
+                    {g.kilos_reservado > 0 && (
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        (+{g.kilos_reservado.toFixed(2)} res.)
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-3 tabular-nums text-action">
                     {g.reservado} rollos

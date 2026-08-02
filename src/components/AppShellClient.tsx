@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useSyncExternalStore, useState, type CSSProperties } from 'react'
 import {
+  AlertTriangle,
   BarChart3,
   Boxes,
   Building2,
@@ -17,6 +18,7 @@ import {
   Menu,
   PackagePlus,
   Palette,
+  RotateCcw,
   ScanLine,
   Scissors,
   Search,
@@ -80,6 +82,7 @@ function navForRole(role: Role): NavSection[] {
           { href: '/confirmar', label: 'Confirmar llegadas', icon: ScanLine },
           { href: '/stock', label: 'Stock', icon: Search },
           { href: '/picking', label: 'Picking', icon: ClipboardCheck },
+          { href: '/devoluciones', label: 'Devoluciones', icon: RotateCcw },
           { href: '/muestras', label: 'Muestras', icon: Scissors },
           { href: '/rollos-sin-etiqueta', label: 'Etiquetado manual', icon: Tag },
         ],
@@ -109,6 +112,7 @@ function navForRole(role: Role): NavSection[] {
       title: 'Operación',
       items: [
         { href: '/ingresos', label: 'Ingresos', icon: PackagePlus },
+        { href: '/devoluciones', label: 'Devoluciones', icon: RotateCcw },
         { href: '/rollos-sin-etiqueta', label: 'Etiquetado manual', icon: Tag },
       ],
     },
@@ -128,6 +132,7 @@ function navForRole(role: Role): NavSection[] {
         { href: '/admin/colores', label: 'Colores', icon: Palette },
         { href: '/admin/ubicaciones', label: 'Ubicaciones', icon: MapPinned },
         { href: '/admin/tintorerias', label: 'Tintorerías', icon: Factory },
+        { href: '/admin/fallas', label: 'Tipos de falla', icon: AlertTriangle },
         { href: '/admin/equipo', label: 'Equipo', icon: Users },
         { href: '/admin/reportes', label: 'Reportes', icon: BarChart3 },
         { href: '/admin/historial', label: 'Historial', icon: History },

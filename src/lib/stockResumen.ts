@@ -62,6 +62,8 @@ export type StockSummaryGroup = {
   color: string
   rollos: number
   kilos: number
+  kilos_libre: number
+  kilos_reservado: number
   reservado: number
   libre: number
   partidas: StockSummaryPartida[]
@@ -92,6 +94,8 @@ type GroupAcc = {
   en_stock: number
   pickeados: number
   kilos: number
+  kilos_libre: number
+  kilos_reservado: number
   demanda: number
 }
 
@@ -140,6 +144,8 @@ export function buildStockSummary(
       en_stock: 0,
       pickeados: 0,
       kilos: 0,
+      kilos_libre: 0,
+      kilos_reservado: 0,
       demanda: 0,
     }
     groups.set(key, group)
@@ -187,9 +193,11 @@ export function buildStockSummary(
 
     if (r.estado === 'reservado') {
       group.pickeados += 1
+      group.kilos_reservado += kilos
       partida.pickeados += 1
     } else {
       group.en_stock += 1
+      group.kilos_libre += kilos
       partida.en_stock += 1
     }
   }
@@ -237,6 +245,8 @@ export function buildStockSummary(
       articulo: group.articulo,
       color: group.color,
       kilos: group.kilos,
+      kilos_libre: group.kilos_libre,
+      kilos_reservado: group.kilos_reservado,
       rollos: totales.rollos,
       reservado: totales.reservado,
       libre: totales.libre,

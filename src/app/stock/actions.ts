@@ -8,9 +8,7 @@ import {
   MIME_TYPES_ACEPTADOS,
 } from '@/lib/storage/planillas'
 import {
-  FALLA_CATEGORIAS,
   ESTADOS_EDITABLES,
-  type FallaCategoria,
   type EstadoEditable,
 } from './constants'
 import { validarUbicacionActiva } from '@/lib/ubicacionesServer'
@@ -500,7 +498,7 @@ export async function devolverRolloAStock(
 }
 
 export type MarcarSegundaParams = {
-  categoria: FallaCategoria
+  categoria: string
   descripcion?: string
   fotoPaths?: string[]
 }
@@ -530,7 +528,7 @@ export async function marcarComoSegunda(
       }
     }
 
-    if (!params || !FALLA_CATEGORIAS.includes(params.categoria)) {
+    if (!params?.categoria?.trim()) {
       return {
         ok: false,
         error: 'Elegí una categoría de falla para marcar como segunda.',

@@ -7,12 +7,12 @@ import type { FallaCategoria } from '../queries/tintorerias'
 // Misma familia de colores que el gráfico de fallas por tintorería:
 // naranja = teñido, rojo = tejeduría, gris = otro.
 const FALLA_COLOR: Record<FallaCategoria, string> = {
-  mancha: '#f59e0b',
-  color_disparejo: '#fbbf24',
-  tono_diferente: '#fcd34d',
-  agujero: '#ef4444',
-  rotura_tejido: '#f87171',
-  otro: '#94a3b8',
+  Mancha: '#f59e0b',
+  'Color disparejo': '#fbbf24',
+  'Tono diferente': '#fcd34d',
+  Agujero: '#ef4444',
+  'Rotura de tejido': '#f87171',
+  Otro: '#94a3b8',
 }
 
 export default function FallasDonaChart({

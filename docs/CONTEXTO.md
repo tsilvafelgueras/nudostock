@@ -140,10 +140,17 @@ Tablas principales:
 - id, empresa_id, ingreso_id, articulo_id, **color_id**, numero_pieza (string), **ubicacion** (slot tipo "A42"), pantone, foto_url, kilos, metros, **rinde**, kilos_propios, metros_propios, ancho_propio, gramaje_propio, estado, confianza_ia, gramaje_planilla, auditado_at, auditado_por, **falla_categoria**, **falla_descripcion**, created_at
 - **Post-007**: `codigo_externo` ELIMINADO. `color` (texto) ELIMINADO (se movió a `ingresos`). Se agrega `gramaje_planilla`.
 - **Post-008**: la columna FK `despacho_id` se renombró a `ingreso_id`.
-- **Post-029**: `falla_categoria` (`mancha`/`agujero`/`color_disparejo`/`tono_diferente`/`rotura_tejido`/`otro`) + `falla_descripcion`. Aplica cuando `estado='segunda'`.
+- **Post-029**: `falla_categoria` (TEXT libre) + `falla_descripcion`. Aplica cuando `estado='segunda'`. **Post-064**: la categoría ya no es un CHECK enum hardcodeado; los valores válidos viven en la tabla `tipos_falla` y se validan en la app. Histórico normalizado a Title Case (ej. `'mancha'` → `'Mancha'`).
 - **Post-039** (2026-05-26): `ratio_rendimiento` RENOMBRADO a `rinde` (terminología de la industria textil). Agrega `color_id UUID NOT NULL REFERENCES colores(id)` + FK compuesta `(articulo_id, color_id) → articulo_colores`. El trigger viejo `sync_rollo_color_from_articulo` fue eliminado (ya no hay color en artículos).
 - Estados: `pendiente` → `en_stock` → `reservado` → `entregado` | `baja` | `segunda`
 - UNIQUE (numero_pieza) por empresa (post-018)
+
+### `tipos_falla` (migración 064)
+- id, empresa_id, nombre (Title Case, ej. "Mancha", "Aguja"), activo, orden, created_at
+- UNIQUE (empresa_id, nombre). Catálogo configurable por empresa — reemplaza el CHECK enum de `rollos.falla_categoria`.
+- RLS: SELECT abierto a cualquier autenticado de la empresa; INSERT/UPDATE/DELETE solo admin.
+- Trigger `set_empresa_tipos_falla` auto-rellena `empresa_id`. 14 categorías seed por defecto: Mancha, Agujero, Color disparejo, Tono diferente, Rotura de tejido, Otro, Aguja, Corte de elastano, Teñido desparejo, Barrado intenso, Lycra invertida, Falta de elasticidad, Marca de aguja, Ancho fuera de medida.
+- Admin lo gestiona desde `/admin/fallas` (toggle activo/inactivo, edición inline, nuevo).
 
 ### `pedidos`
 - id, empresa_id, numero_pedido, cliente, cliente_id, **numero_remito_externo**, estado, confirmada_egreso_at, confirmada_egreso_por, created_by, created_at
@@ -200,6 +207,10 @@ src/
 │   │   │   ├── page.tsx
 │   │   │   ├── ArticuloForm.tsx
 │   │   │   └── actions.ts
+│   │   ├── fallas/               # Tipos de falla configurables (mig 064)
+│   │   │   ├── page.tsx          # Server component — fetch tipos_falla
+│   │   │   ├── FallasAdminClient.tsx  # Client — toggle activo, edición inline, nuevo
+│   │   │   └── actions.ts        # crearTipoFalla, actualizarTipoFalla, toggleTipoFalla
 │   │   ├── tintorerias/          # Solo listado + aviso "contactá soporte" (alta vía SQL)
 │   │   │   ├── page.tsx
 │   │   │   ├── TintoreriaForm.tsx   # ⚠ archivo huérfano (no se renderea desde page.tsx)
@@ -249,6 +260,11 @@ src/
 │   │   ├── layout.tsx                   # Guard: operario|admin
 │   │   ├── page.tsx
 │   │   └── [id]/{page,Scanner,actions}.{tsx,ts}
+│   ├── devoluciones/             # Módulo de devoluciones de cliente (mig 065)
+│   │   ├── layout.tsx                   # (hereda del root layout)
+│   │   ├── page.tsx                     # Server component — guard operario|admin, fetch tipos_falla
+│   │   ├── DevolucionesWizard.tsx       # Client — wizard multi-paso (tipo→scan/buscar→motivo→éxito)
+│   │   └── actions.ts                   # getRolloEntregado, buscarPartidasConEntregados, devolverRollos
 │   ├── picking/                  # Picking de pedidos (Etapa 6B)
 │   │   ├── layout.tsx                   # Guard: operario|admin
 │   │   ├── page.tsx
@@ -301,6 +317,7 @@ src/
 │   │   ├── gemini.ts
 │   │   └── tintorerias/{_types,_default,_registry,muter-textil}.ts
 │   ├── storage/planillas.ts      # Upload a Storage privado bucket "planillas"
+│   ├── stockResumen.ts           # buildStockSummary: agrega rollos en en_stock+reservado por artículo+color. StockSummaryGroup incluye kilos_libre (solo en_stock) y kilos_reservado (solo reservado) para mostrar disponibilidad real.
 │   ├── scanner.ts                # extraerCodigoRollo(raw, patrones, esperados) - mig 023
 │   ├── ubicaciones.ts            # Constante con las 180 ubicaciones del depósito (A1..F30)
 │   └── utils.ts                  # Helpers genéricos (cn, etc.)
@@ -384,7 +401,10 @@ Todas idempotentes, todas pegadas en Supabase SQL Editor.
 | 046 | **Kilos de crudo por partida (merma real)** (iteración 2026-06-03). `ingresos.kilos_crudo_enviado` (total de kg de crudo que salió a teñir, **un total por partida**, no por rollo) + `kilos_crudo_cargado_at`/`kilos_crudo_cargado_por`. Habilita el cálculo de la **merma real del proceso de teñido** (crudo enviado vs teñido recibido = suma de rollos), que el modelo viejo no podía calcular. Se carga en el detalle del ingreso (`/ingresos/[id]`). Idempotente, sin TRUNCATE. |
 | 063 | **Fix: devolución parcial libera el índice único de picking** (iteración 2026-07-21). `devolver_rollos_pedido` y `devolver_rollo_por_rollo_id` ahora también setean `liberado_at = now()` y `liberado_motivo = 'devolucion_cliente'` al marcar la devolución. Sin esto, la fila de `pedido_rollos` seguía activa para el índice único `pedidos_rollos_rollo_id_activo_key` (`WHERE liberado_at IS NULL`) y bloqueaba el picking del mismo rollo en un pedido nuevo. Incluye backfill de filas ya devueltas con `liberado_at IS NULL`. |
 
-**Schema canónico**: ✅ `supabase/schema.sql` refleja el modelo actual (post-039). Para DB nueva: correr `schema.sql` y después las migraciones `040`..`063` en orden.
+| 064 | **Tipos de falla configurables** (iteración 2026-07-22). Nueva tabla `tipos_falla` (id, empresa_id, nombre, activo, orden). DROP de `rollos_falla_categoria_check` (CHECK enum hardcodeado). Normalización de datos históricos: `'mancha'` → `'Mancha'`, `'agujero'` → `'Agujero'`, etc. (Title Case). Seed de 14 categorías para todas las empresas existentes. Admin gestiona desde `/admin/fallas`. Los dropdowns de ingreso y stock se alimentan dinámicamente desde esta tabla. |
+| 065 | **Módulo de devoluciones** (iteración 2026-07-22). RPC `devolver_rollos_deposito(p_items jsonb, p_motivo text)`: acepta array de `{rollo_id, segunda, falla_categoria}`, valida `estado='entregado'`, transiciona a `en_stock`/`segunda`, setea `liberado_at` en `pedido_rollos`, appenda traza al `rollos.comentario`, crea notificación y log de movimiento. RPC `buscar_partidas_con_entregados(p_query text)`: busca ingresos con rollos entregados por OT/remito/lote. RPC auxiliar `rollos_entregados_por_ingreso(p_ingreso_id uuid)`. |
+
+**Schema canónico**: ✅ `supabase/schema.sql` refleja el modelo actual (post-039). Para DB nueva: correr `schema.sql` y después las migraciones `040`..`065` en orden.
 
 ---
 

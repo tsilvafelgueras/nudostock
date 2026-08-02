@@ -53,14 +53,6 @@ type Confianzas = {
   }>
 }
 
-const FALLA_CATEGORIAS: { value: string; label: string }[] = [
-  { value: 'mancha', label: 'Mancha' },
-  { value: 'agujero', label: 'Agujero' },
-  { value: 'color_disparejo', label: 'Color disparejo' },
-  { value: 'tono_diferente', label: 'Tono diferente' },
-  { value: 'rotura_tejido', label: 'Rotura de tejido' },
-  { value: 'otro', label: 'Otro' },
-]
 
 function normNombre(s: string): string {
   return s
@@ -198,6 +190,7 @@ export default function NuevoIngresoForm({
   ubicaciones,
   role,
   patrones,
+  tiposFalla = [],
 }: {
   tintorerias: Catalog[]
   articulos: ArticuloCatalog[]
@@ -205,6 +198,7 @@ export default function NuevoIngresoForm({
   ubicaciones: UbicacionOption[]
   role: Role
   patrones: PatronConTintoreria[]
+  tiposFalla?: { id: string; nombre: string }[]
 }) {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -983,6 +977,7 @@ export default function NuevoIngresoForm({
           }}
           rolloNumber={lastScannedIdx + 1}
           totalRollos={rollos.filter((r) => r.numero_pieza.trim()).length}
+          tiposFalla={tiposFalla}
         />
       ) : (<>
 
@@ -1484,6 +1479,7 @@ export default function NuevoIngresoForm({
               onToggleSegunda={(v) => toggleSegunda(i, v)}
               onFotoFalla={(f) => setFotoFalla(i, f)}
               onRemove={() => removeRow(i)}
+              tiposFalla={tiposFalla}
             />
           ))}
         </div>
@@ -1684,6 +1680,7 @@ export default function NuevoIngresoForm({
                               updateRollo(i, field, value)
                             }
                             onFoto={(f) => setFotoFalla(i, f)}
+                            tiposFalla={tiposFalla}
                           />
                         </td>
                       </tr>
@@ -1830,11 +1827,13 @@ function SegundaCalidadFields({
   foto,
   onUpdate,
   onFoto,
+  tiposFalla = [],
 }: {
   rollo: RolloInput
   foto: FotoPendiente | undefined
   onUpdate: <K extends keyof RolloInput>(field: K, value: RolloInput[K]) => void
   onFoto: (file: File | null) => void
+  tiposFalla?: { id: string; nombre: string }[]
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1852,9 +1851,9 @@ function SegundaCalidadFields({
           }`}
         >
           <option value="">Seleccionar...</option>
-          {FALLA_CATEGORIAS.map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
+          {tiposFalla.map((t) => (
+            <option key={t.id} value={t.nombre}>
+              {t.nombre}
             </option>
           ))}
         </select>
@@ -1930,6 +1929,7 @@ function RolloCardMobile({
   onToggleSegunda,
   onFotoFalla,
   onRemove,
+  tiposFalla = [],
 }: {
   rollo: RolloInput
   index: number
@@ -1954,6 +1954,7 @@ function RolloCardMobile({
   onToggleSegunda: (v: boolean) => void
   onFotoFalla: (file: File | null) => void
   onRemove: () => void
+  tiposFalla?: { id: string; nombre: string }[]
 }) {
   return (
     <div
@@ -2130,6 +2131,7 @@ function RolloCardMobile({
           foto={fotoFalla}
           onUpdate={onUpdate}
           onFoto={onFotoFalla}
+          tiposFalla={tiposFalla}
         />
       )}
     </div>
@@ -2154,6 +2156,7 @@ function EditingRolloView({
   onVerTodos,
   rolloNumber,
   totalRollos,
+  tiposFalla = [],
 }: {
   rollo: RolloInput
   scannerTipo: 'qr' | 'barcode' | null
@@ -2178,6 +2181,7 @@ function EditingRolloView({
   onFotoFalla: (file: File | null) => void
   onSiguienteRollo: () => void
   onVerTodos: () => void
+  tiposFalla?: { id: string; nombre: string }[]
   rolloNumber: number
   totalRollos: number
 }) {
@@ -2342,6 +2346,7 @@ function EditingRolloView({
               foto={fotoFalla}
               onUpdate={onUpdate}
               onFoto={onFotoFalla}
+              tiposFalla={tiposFalla}
             />
           )}
         </div>

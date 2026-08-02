@@ -26,6 +26,7 @@ export default async function NuevoIngresoPage() {
     { data: profile },
     ubicaciones,
     { data: patronesRaw },
+    { data: tiposFallaRaw },
   ] = await Promise.all([
     supabase
       .from('empresa_tintorerias')
@@ -55,6 +56,12 @@ export default async function NuevoIngresoPage() {
       .select('tintoreria_id, pattern, capture_group, prioridad')
       .eq('activo', true)
       .order('prioridad'),
+    supabase
+      .from('tipos_falla')
+      .select('id, nombre')
+      .eq('activo', true)
+      .order('orden', { ascending: true })
+      .order('nombre', { ascending: true }),
   ])
 
   type EmpresaTintRow = {
@@ -131,6 +138,7 @@ export default async function NuevoIngresoPage() {
           ubicaciones={ubicaciones}
           role={role}
           patrones={(patronesRaw ?? []) as { tintoreria_id: string | null; pattern: string; capture_group: number; prioridad: number }[]}
+          tiposFalla={(tiposFallaRaw ?? []) as { id: string; nombre: string }[]}
         />
       )}
     </div>

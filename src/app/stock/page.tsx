@@ -63,6 +63,7 @@ export default async function StockPage({
     { data: otsRaw },
     { data: articuloColoresRaw },
     ubicaciones,
+    { data: tiposFallaRaw },
   ] = await Promise.all([
     supabase
       .from('articulos')
@@ -88,6 +89,12 @@ export default async function StockPage({
       .not('ot', 'is', null),
     supabase.from('articulo_colores').select('articulo_id, color_id'),
     getUbicacionesActivas(supabase),
+    supabase
+      .from('tipos_falla')
+      .select('id, nombre')
+      .eq('activo', true)
+      .order('orden', { ascending: true })
+      .order('nombre', { ascending: true }),
   ])
 
   type EmpresaTintRow = { tintorerias: { id: string; nombre: string } | null }
@@ -252,16 +259,19 @@ export default async function StockPage({
   const resumenRows = (resumenRaw ?? []) as unknown as StockResumenRow[]
   const reservaRows = (reservasRaw ?? []) as unknown as ReservaResumenRow[]
 
-  const totalKilos = resumenRows.reduce(
-    (acc, r) => acc + Number(r.kilos ?? 0),
-    0
-  )
+  const totalKilosLibre = resumenRows
+    .filter((r) => r.estado === 'en_stock')
+    .reduce((acc, r) => acc + Number(r.kilos ?? 0), 0)
+  const totalKilosReservado = resumenRows
+    .filter((r) => r.estado === 'reservado')
+    .reduce((acc, r) => acc + Number(r.kilos ?? 0), 0)
 
   const aggMap = new Map<
     string,
     { articulo: string; color: string; kilos: number }
   >()
   for (const r of resumenRows) {
+    if (r.estado !== 'en_stock') continue
     const articulo = r.articulos?.nombre ?? '-'
     const color = r.color_id ? colorById.get(r.color_id)?.nombre ?? '-' : '-'
     const key = `${articulo}|||${color}`
@@ -298,18 +308,27 @@ export default async function StockPage({
         <div className="rounded-lg border bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              Total en stock
+              Kg disponibles
             </p>
             <Boxes className="size-4 text-action" />
           </div>
           <p className="mt-2 font-heading text-3xl font-bold tabular-nums">
-            {totalKilos.toLocaleString('es-AR', {
+            {totalKilosLibre.toLocaleString('es-AR', {
               maximumFractionDigits: 2,
             })}{' '}
             kg
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {resumenRows.length} {resumenRows.length === 1 ? 'rollo' : 'rollos'}
+            {totalKilosReservado > 0 && (
+              <span className="ml-1 text-muted-foreground">
+                ·{' '}
+                {totalKilosReservado.toLocaleString('es-AR', {
+                  maximumFractionDigits: 2,
+                })}{' '}
+                kg reservados
+              </span>
+            )}
           </p>
         </div>
         <div className="rounded-lg border bg-white p-4 shadow-sm">
@@ -385,6 +404,7 @@ export default async function StockPage({
             ubicaciones={ubicaciones}
             articulos={articulos ?? []}
             articuloColores={articuloColores}
+            tiposFalla={(tiposFallaRaw ?? []) as { id: string; nombre: string }[]}
           />
         </>
       )}

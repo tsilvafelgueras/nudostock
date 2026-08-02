@@ -95,7 +95,7 @@ rollos
 - gramaje_propio numeric
 - gramaje_planilla numeric
 - estado text: pendiente | en_stock | reservado | entregado | baja | segunda
-- falla_categoria text: mancha | agujero | color_disparejo | tono_diferente | rotura_tejido | otro | null
+- falla_categoria text: valor libre configurado por la empresa en tabla tipos_falla (ej. Mancha, Agujero, Aguja, Barrado intenso, etc.) | null
 - falla_descripcion text
 - confianza_ia numeric
 - comentario text
