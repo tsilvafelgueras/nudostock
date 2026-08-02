@@ -5,8 +5,8 @@
 --   1) INNER JOIN → LEFT JOIN en tintorerias y articulos: un ingreso
 --      con tintoreria_id / articulo_id NULL ya NO desaparece del
 --      resultado (antes el INNER JOIN lo descartaba en silencio).
---   2) Agrega búsqueda por pedidos.numero_remito_externo (remito del
---      cliente) además de numero_pedido.
+--   2) Búsqueda por OT (i.ot), partida (i.numero_lote) y número de
+--      pedido (p.numero_pedido). NO busca por remito.
 --   3) Refresca el cache de esquema de PostgREST.
 --
 -- Idempotente — DROP + CREATE.
@@ -52,9 +52,8 @@ AS $$
     AND r.empresa_id = public.current_empresa_id()
     AND (
       p_query = ''
-      OR i.ot            ILIKE '%' || p_query || '%'
-      OR i.numero_remito ILIKE '%' || p_query || '%'
-      OR i.numero_lote   ILIKE '%' || p_query || '%'
+      OR i.ot          ILIKE '%' || p_query || '%'
+      OR i.numero_lote ILIKE '%' || p_query || '%'
       OR EXISTS (
         SELECT 1
           FROM rollos      r2
@@ -63,10 +62,7 @@ AS $$
          WHERE r2.ingreso_id = i.id
            AND r2.estado     = 'entregado'
            AND p2.empresa_id = i.empresa_id
-           AND (
-             p2.numero_pedido         ILIKE '%' || p_query || '%'
-             OR p2.numero_remito_externo ILIKE '%' || p_query || '%'
-           )
+           AND p2.numero_pedido ILIKE '%' || p_query || '%'
       )
     )
   GROUP BY i.id, i.ot, i.numero_remito, i.fecha_despacho,

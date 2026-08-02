@@ -303,7 +303,7 @@ function StepBuscarPartida({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar por OT, remito, lote o número de pedido..."
+            placeholder="Buscar por OT, partida o número de pedido..."
             className="w-full rounded-lg border border-input bg-white py-2.5 pl-9 pr-3 text-sm"
             autoFocus
           />
@@ -341,7 +341,7 @@ function StepBuscarPartida({
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-0.5">
                     <p className="font-medium">
-                      {p.ot ? `OT ${p.ot}` : p.numero_remito ? `Remito ${p.numero_remito}` : p.numero_lote ?? 'Sin identificador'}
+                      {p.ot ? `OT ${p.ot}` : p.numero_lote ? `Partida ${p.numero_lote}` : 'Sin identificador'}
                     </p>
                     <p className="text-sm text-muted-foreground">
                       {p.tintoreria_nombre} · {p.articulo_nombre}
