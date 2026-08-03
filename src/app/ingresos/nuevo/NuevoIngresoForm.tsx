@@ -766,7 +766,7 @@ export default function NuevoIngresoForm({
       // PRIMER número del payload. Lo demás (color/artículo por nombre, kilos
       // por el decimal) se extrae aparte y va a sus campos correspondientes.
       const primero = raw.match(/\d+/)?.[0] ?? ''
-      numeroPieza = primero ? primero.replace(/^0+/, '') || primero : raw
+      numeroPieza = primero || raw
     }
 
     // 2. Extraer kilos: último número decimal en el payload

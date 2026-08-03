@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useTransition } from 'react'
+import { useState, useCallback, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -383,15 +383,15 @@ function StepSeleccionarRollos({
   const [loading, startLoad] = useTransition()
   const [loaded, setLoaded] = useState(false)
 
-  // Load once on mount
-  if (!loaded && !loading) {
+  useEffect(() => {
+    if (loaded) return
     startLoad(async () => {
       const data = await getRollosEntregadosByIngreso(ingresoId)
       setRollos(data)
       setSelected(new Set(data.map((r) => r.id)))
       setLoaded(true)
     })
-  }
+  }, [ingresoId])
 
   function toggleAll() {
     if (selected.size === rollos.length) setSelected(new Set())
