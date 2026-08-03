@@ -50,7 +50,7 @@ export async function getRolloEntregado(
     .select(`
       id, numero_pieza, kilos, metros, ingreso_id,
       articulos ( nombre ),
-      colores: color_id ( nombre ),
+      colores ( nombre ),
       ingresos!inner (
         id, numero_lote,
         tintorerias ( nombre )
@@ -152,15 +152,20 @@ export async function getRollosEntregadosByIngreso(
   const rolloIds = ((data ?? []) as RpcRow[]).map((r) => r.rollo_id)
   if (rolloIds.length === 0) return []
 
-  const { data: rollosData } = await supabase
+  const { data: rollosData, error: rollosError } = await supabase
     .from('rollos')
     .select(`
       id, numero_pieza, kilos, metros, ingreso_id,
       articulos ( nombre ),
-      colores: color_id ( nombre ),
+      colores ( nombre ),
       ingresos!inner ( id, numero_lote, tintorerias ( nombre ) )
     `)
     .in('id', rolloIds)
+
+  if (rollosError) {
+    console.error('[getRollosEntregadosByIngreso] Query error:', rollosError)
+    return []
+  }
 
   type RolloRaw = {
     id: string
