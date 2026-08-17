@@ -2068,3 +2068,46 @@ src/app/rollos-sin-etiqueta/
 ### Estado del branch (2026-07-21)
 
 `development` mergeado a `main` con `--no-ff`. Vercel redesplegó automático. **Migración 063 pendiente de aplicar en Supabase** (SQL Editor del proyecto).
+
+---
+
+## 10.17. Iteración 2026-08 — Carga directa de remitos para extracción IA
+
+### Bug: fotos de remitos no llegaban a Gemini
+
+**Síntoma**: al subir una foto o PDF desde `/ingresos/nuevo`, la UI podía
+quedar indefinidamente en "Procesando planilla con IA" sin extraer datos.
+
+**Causa**: el navegador enviaba el archivo completo a
+`procesarPlanillaConIA` como `FormData`. Next.js limita por defecto el body de
+una Server Action a 1 MB y Vercel aplica además su propio límite de payload.
+Las fotos normales de celular podían ser rechazadas antes de que se ejecutara
+la acción, por lo que el archivo nunca llegaba a Storage ni a Gemini. La UI no
+tenía `try/catch/finally`, así que tampoco salía del estado de carga.
+
+### Solución en `development`
+
+- El backend genera un permiso temporal con `createSignedUploadUrl` y un path
+  `{empresa_id}/{yyyy-mm}/{uuid}.{ext}`.
+- El navegador sube el archivo directamente al bucket privado `planillas` con
+  `uploadToSignedUrl`; por la Server Action pasan solamente metadatos y el path.
+- `procesarPlanillaConIA` valida sesión, empresa, formato de path y asociación
+  activa con la tintorería; después descarga el archivo desde Storage y lo
+  envía a Gemini.
+- El `extraction_prompt` interno de la tintorería se conserva sin cambios. Si
+  es NULL, Gemini sigue usando las instrucciones genéricas.
+- Reintentar IA reutiliza el objeto ya subido, sin pedir otra carga al cliente.
+- La UI distingue "Subiendo" de "Procesando", captura rechazos inesperados y
+  siempre libera el spinner con `finally`.
+- Límite de la app: 14 MB por archivo. Deja margen para la codificación base64,
+  el prompt y el schema dentro del máximo inline de Gemini.
+- `descartarPlanillaTemporal` limpia archivos abandonados explícitamente y se
+  niega a borrar objetos ya referenciados por un ingreso.
+
+No requiere dependencia nueva ni migración SQL; reutiliza el bucket y sus
+políticas RLS existentes.
+
+**Pruebas agregadas**:
+- `src/lib/extraccion/gemini.test.ts`
+- `src/lib/storage/planillaArchivo.test.ts`
+- `src/app/ingresos/nuevo/actions.extraccion.test.ts`
