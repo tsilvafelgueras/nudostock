@@ -69,10 +69,26 @@ export function extraerCodigoCandidato(
   raw: string,
   patrones: PatronCodigo[]
 ): string | null {
+  return extraerCodigosCandidatos(raw, patrones)[0] ?? null
+}
+
+/**
+ * Devuelve todos los candidatos distintos que extraen los patrones.
+ *
+ * Es útil cuando todavía no conocemos la tintorería del rollo (por ejemplo,
+ * en devoluciones): el backend puede validar los candidatos contra los rollos
+ * realmente egresados sin confiar ciegamente en el primer regex que matchee.
+ */
+export function extraerCodigosCandidatos(
+  raw: string,
+  patrones: PatronCodigo[]
+): string[] {
   const texto = normalizarTexto(raw)
-  if (!texto || patrones.length === 0) return null
+  if (!texto || patrones.length === 0) return []
 
   const ordenados = [...patrones].sort((a, b) => a.prioridad - b.prioridad)
+  const candidatos: string[] = []
+  const vistos = new Set<string>()
 
   for (const p of ordenados) {
     let regex: RegExp
@@ -85,10 +101,16 @@ export function extraerCodigoCandidato(
     if (!match) continue
     const grupo = p.capture_group ?? 0
     const candidato = match[grupo]?.trim()
-    if (candidato) return candidato
+    if (!candidato) continue
+
+    const clave = candidato.toUpperCase()
+    if (!vistos.has(clave)) {
+      vistos.add(clave)
+      candidatos.push(candidato)
+    }
   }
 
-  return null
+  return candidatos
 }
 
 function normalizarTexto(value: string): string {

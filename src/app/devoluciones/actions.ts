@@ -40,80 +40,92 @@ export type BuscarPartidasResult =
   | { ok: true; rows: PartidaConEntregadosRow[] }
   | { ok: false; error: string }
 
-export async function getRolloEntregado(
-  numeroPieza: string
-): Promise<{ ok: true; rollo: RolloEntregadoInfo } | { ok: false; error: string }> {
-  const supabase = await createClient()
+export type BuscarRollosResult =
+  | { ok: true; rollos: RolloEntregadoInfo[] }
+  | { ok: false; error: string }
 
-  const { data, error } = await supabase
-    .from('rollos')
-    .select(`
-      id, numero_pieza, kilos, metros, ingreso_id,
-      articulos ( nombre ),
-      colores ( nombre ),
-      ingresos!inner (
-        id, numero_lote,
-        tintorerias ( nombre )
-      )
-    `)
-    .eq('numero_pieza', numeroPieza.trim())
-    .eq('estado', 'entregado')
-    .single()
+type RolloEntregadoRpcRow = {
+  rollo_id: string
+  numero_pieza: string
+  kilos: number | null
+  metros: number | null
+  articulo: string | null
+  color: string | null
+  ingreso_id: string
+  numero_lote: string | null
+  tintoreria: string | null
+  pedido_numero: string | null
+}
 
-  if (error || !data) {
-    if (error?.code === 'PGRST116') {
-      return {
-        ok: false,
-        error: `No se encontró ningún rollo entregado con número de pieza "${numeroPieza}". Verificá que el rollo haya sido entregado a un cliente.`,
-      }
-    }
-    return { ok: false, error: 'Error al buscar el rollo.' }
-  }
-
-  type Raw = typeof data & {
-    articulos: { nombre: string } | null
-    colores: { nombre: string } | null
-    ingresos: { id: string; numero_lote: string | null; tintorerias: { nombre: string } | null } | null
-  }
-  const r = data as unknown as Raw
-
-  // Buscar el pedido asociado
-  const { data: prData } = await supabase
-    .from('pedido_rollos')
-    .select('pedidos!inner ( numero_pedido )')
-    .eq('rollo_id', r.id)
-    .is('devuelto_at', null)
-    .is('liberado_at', null)
-    .limit(1)
-    .single()
-
-  type PrRaw = { pedidos: { numero_pedido: string } | null }
-  const pedidoNumero = (prData as unknown as PrRaw | null)?.pedidos?.numero_pedido ?? null
-
+function mapRolloEntregado(row: RolloEntregadoRpcRow): RolloEntregadoInfo {
   return {
-    ok: true,
-    rollo: {
-      id: r.id,
-      numero_pieza: r.numero_pieza,
-      kilos: r.kilos,
-      metros: r.metros,
-      articulo: (r.articulos as unknown as { nombre: string } | null)?.nombre ?? '-',
-      color: (r.colores as unknown as { nombre: string } | null)?.nombre ?? '-',
-      ingreso_id: r.ingresos?.id ?? '',
-      numero_lote: r.ingresos?.numero_lote ?? null,
-      tintoreria: (r.ingresos?.tintorerias as unknown as { nombre: string } | null)?.nombre ?? '-',
-      pedido_numero: pedidoNumero,
-    },
+    id: row.rollo_id,
+    numero_pieza: row.numero_pieza,
+    kilos: row.kilos,
+    metros: row.metros,
+    articulo: row.articulo ?? '-',
+    color: row.color ?? '-',
+    ingreso_id: row.ingreso_id,
+    numero_lote: row.numero_lote,
+    tintoreria: row.tintoreria ?? '-',
+    pedido_numero: row.pedido_numero,
   }
+}
+
+export async function getRolloEntregado(
+  codigos: string[]
+): Promise<{ ok: true; rollo: RolloEntregadoInfo } | { ok: false; error: string }> {
+  const candidatos = Array.from(
+    new Set(codigos.map((codigo) => codigo.trim()).filter(Boolean))
+  ).slice(0, 20)
+
+  if (candidatos.length === 0) {
+    return { ok: false, error: 'No se recibió un código de rollo válido.' }
+  }
+
+  const supabase = await createClient()
+  const { data, error } = await supabase.rpc(
+    'buscar_rollo_entregado_por_codigos',
+    { p_codigos: candidatos }
+  )
+
+  if (error) {
+    console.error('[getRolloEntregado] RPC error:', error)
+    return {
+      ok: false,
+      error: `Error al buscar el rollo: ${error.message}${error.code ? ` (${error.code})` : ''}`,
+    }
+  }
+
+  const rows = (data ?? []) as RolloEntregadoRpcRow[]
+  if (rows.length === 0) {
+    return {
+      ok: false,
+      error:
+        'No se encontró un rollo egresado y pendiente de devolución con ese número. Revisá el código o verificá que no haya sido devuelto antes.',
+    }
+  }
+
+  if (rows.length > 1) {
+    return {
+      ok: false,
+      error:
+        'El código coincide con más de un rollo egresado. Ingresá el número de pieza completo, incluyendo los ceros iniciales.',
+    }
+  }
+
+  return { ok: true, rollo: mapRolloEntregado(rows[0]) }
 }
 
 export async function buscarPartidasConEntregados(
   query: string
 ): Promise<BuscarPartidasResult> {
-  const supabase = await createClient()
+  const busqueda = query.trim()
+  if (!busqueda) return { ok: false, error: 'Ingresá una OT, partida o pedido.' }
 
+  const supabase = await createClient()
   const { data, error } = await supabase.rpc('buscar_partidas_con_entregados', {
-    p_query: query.trim(),
+    p_query: busqueda,
   })
 
   if (error) {
@@ -123,75 +135,38 @@ export async function buscarPartidasConEntregados(
       error: `Error al buscar partidas: ${error.message}${error.code ? ` (${error.code})` : ''}`,
     }
   }
-  return { ok: true, rows: (data ?? []) as PartidaConEntregadosRow[] }
+
+  const rows = ((data ?? []) as PartidaConEntregadosRow[]).map((row) => ({
+    ...row,
+    rollos_entregados: Number(row.rollos_entregados),
+  }))
+  return { ok: true, rows }
 }
 
 export async function getRollosEntregadosByIngreso(
   ingresoId: string
-): Promise<RolloEntregadoInfo[]> {
-  const supabase = await createClient()
+): Promise<BuscarRollosResult> {
+  if (!ingresoId.trim()) {
+    return { ok: false, error: 'La partida seleccionada no es válida.' }
+  }
 
+  const supabase = await createClient()
   const { data, error } = await supabase.rpc('rollos_entregados_por_ingreso', {
     p_ingreso_id: ingresoId,
   })
 
   if (error) {
     console.error('[getRollosEntregadosByIngreso] RPC error:', error)
-    return []
+    return {
+      ok: false,
+      error: `Error al cargar los rollos de la partida: ${error.message}${error.code ? ` (${error.code})` : ''}`,
+    }
   }
 
-  type RpcRow = {
-    rollo_id: string
-    numero_pieza: string
-    kilos: number | null
-    metros: number | null
-    pedido_numero: string | null
+  return {
+    ok: true,
+    rollos: ((data ?? []) as RolloEntregadoRpcRow[]).map(mapRolloEntregado),
   }
-
-  // We need articulo/color/tintoreria info — join separately
-  const rolloIds = ((data ?? []) as RpcRow[]).map((r) => r.rollo_id)
-  if (rolloIds.length === 0) return []
-
-  const { data: rollosData, error: rollosError } = await supabase
-    .from('rollos')
-    .select(`
-      id, numero_pieza, kilos, metros, ingreso_id,
-      articulos ( nombre ),
-      colores ( nombre ),
-      ingresos!inner ( id, numero_lote, tintorerias ( nombre ) )
-    `)
-    .in('id', rolloIds)
-
-  if (rollosError) {
-    console.error('[getRollosEntregadosByIngreso] Query error:', rollosError)
-    return []
-  }
-
-  type RolloRaw = {
-    id: string
-    numero_pieza: string
-    kilos: number | null
-    metros: number | null
-    ingreso_id: string
-    articulos: { nombre: string } | null
-    colores: { nombre: string } | null
-    ingresos: { id: string; numero_lote: string | null; tintorerias: { nombre: string } | null } | null
-  }
-
-  const rpcByRolloId = new Map(((data ?? []) as RpcRow[]).map((r) => [r.rollo_id, r]))
-
-  return ((rollosData ?? []) as unknown as RolloRaw[]).map((r) => ({
-    id: r.id,
-    numero_pieza: r.numero_pieza,
-    kilos: r.kilos,
-    metros: r.metros,
-    articulo: r.articulos?.nombre ?? '-',
-    color: r.colores?.nombre ?? '-',
-    ingreso_id: r.ingresos?.id ?? '',
-    numero_lote: r.ingresos?.numero_lote ?? null,
-    tintoreria: r.ingresos?.tintorerias?.nombre ?? '-',
-    pedido_numero: rpcByRolloId.get(r.id)?.pedido_numero ?? null,
-  }))
 }
 
 export async function devolverRollos(
@@ -202,7 +177,6 @@ export async function devolverRollos(
   if (!motivo.trim()) return { ok: false, error: 'El motivo es obligatorio.' }
 
   const supabase = await createClient()
-
   const p_items = items.map((item) => ({
     rollo_id: item.rolloId,
     segunda: item.segunda,
@@ -216,7 +190,10 @@ export async function devolverRollos(
 
   if (error) return { ok: false, error: error.message }
 
-  const result = data as { devueltos: number; errores: { rollo_id: string; error: string }[] }
+  const result = data as {
+    devueltos: number
+    errores: { rollo_id: string; error: string }[]
+  }
   return {
     ok: true,
     devueltos: result.devueltos,

@@ -1,6 +1,13 @@
 'use client'
 
-import { useState, useCallback, useTransition, useEffect } from 'react'
+import {
+  useState,
+  useCallback,
+  useTransition,
+  useEffect,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -11,8 +18,15 @@ import {
   PackageCheck,
   CheckCircle2,
   AlertCircle,
+  ArrowLeft,
 } from 'lucide-react'
 import CodeScanner, { type CodeScannerResult } from '@/components/CodeScanner'
+import type { PatronCodigo } from '@/lib/scanner'
+import {
+  construirCandidatosDevolucion,
+  pasoAnteriorDevoluciones,
+  type DevolucionesStep,
+} from '@/lib/devoluciones'
 import {
   getRolloEntregado,
   buscarPartidasConEntregados,
@@ -25,13 +39,21 @@ import {
 
 type TipoFallaOption = { id: string; nombre: string }
 
-type Step =
-  | 'tipo'
-  | 'scan_rollos'
-  | 'buscar_partida'
-  | 'seleccionar_rollos'
-  | 'motivo_segunda'
-  | 'exito'
+type Step = DevolucionesStep
+
+type PartidaSearchState = {
+  query: string
+  buscado: string
+  resultados: PartidaConEntregadosRow[] | null
+  errorMsg: string | null
+}
+
+const EMPTY_PARTIDA_SEARCH: PartidaSearchState = {
+  query: '',
+  buscado: '',
+  resultados: null,
+  errorMsg: null,
+}
 
 type RolloDevolucion = RolloEntregadoInfo & {
   segunda: boolean
@@ -147,8 +169,8 @@ function StepElegirTipo({
           <div>
             <p className="font-semibold">Por partida</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Buscá la OT o remito de la partida y elegí qué rollos devuelve el
-              cliente.
+              Buscá la OT, partida o número de pedido y elegí qué rollos devuelve
+              el cliente.
             </p>
           </div>
           <ChevronRight className="h-4 w-4 self-end text-muted-foreground" />
@@ -164,41 +186,56 @@ function StepElegirTipo({
 
 function StepScanRollos({
   rollos,
+  patrones,
   onRolloAdded,
   onRolloRemoved,
   onContinuar,
 }: {
   rollos: RolloEntregadoInfo[]
+  patrones: PatronCodigo[]
   onRolloAdded: (rollo: RolloEntregadoInfo) => void
   onRolloRemoved: (id: string) => void
   onContinuar: () => void
 }) {
   const [scanning, startScan] = useTransition()
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const scannedIds = new Set(rollos.map((r) => r.id))
 
   const handleScan = useCallback(
     (result: CodeScannerResult) => {
-      const numeroPieza = result.texto.trim()
-      if (!numeroPieza) return
+      const candidatos = construirCandidatosDevolucion(
+        result.texto,
+        Boolean(result.manual),
+        patrones
+      )
+      if (candidatos.length === 0) {
+        setErrorMsg(
+          'No reconocimos el código. Probá nuevamente o ingresá el número de pieza manualmente.'
+        )
+        return
+      }
       setErrorMsg(null)
 
       startScan(async () => {
-        const res = await getRolloEntregado(numeroPieza)
-        if (!res.ok) {
-          setErrorMsg(res.error)
-          return
+        try {
+          const res = await getRolloEntregado(candidatos)
+          if (!res.ok) {
+            setErrorMsg(res.error)
+            return
+          }
+          if (rollos.some((rollo) => rollo.id === res.rollo.id)) {
+            setErrorMsg(`El rollo ${res.rollo.numero_pieza} ya fue agregado.`)
+            return
+          }
+          onRolloAdded(res.rollo)
+          setErrorMsg(null)
+        } catch {
+          setErrorMsg(
+            'No pudimos consultar el rollo. Revisá la conexión e intentá nuevamente.'
+          )
         }
-        if (scannedIds.has(res.rollo.id)) {
-          setErrorMsg(`El rollo ${numeroPieza} ya fue agregado.`)
-          return
-        }
-        onRolloAdded(res.rollo)
-        setErrorMsg(null)
       })
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rollos]
+    [onRolloAdded, patrones, rollos]
   )
 
   return (
@@ -268,30 +305,49 @@ function StepScanRollos({
 // ─────────────────────────────────────────────────────────────
 
 function StepBuscarPartida({
+  state,
+  setState,
   onPartidaSeleccionada,
 }: {
+  state: PartidaSearchState
+  setState: Dispatch<SetStateAction<PartidaSearchState>>
   onPartidaSeleccionada: (ingresoId: string) => void
 }) {
-  const [query, setQuery] = useState('')
-  const [buscado, setBuscado] = useState('')
-  const [resultados, setResultados] = useState<PartidaConEntregadosRow[] | null>(null)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [searching, startSearch] = useTransition()
+  const { query, buscado, resultados, errorMsg } = state
 
   function handleBuscar(e: React.FormEvent) {
     e.preventDefault()
     const q = query.trim()
     if (!q) return
-    setErrorMsg(null)
+    setState((prev) => ({ ...prev, errorMsg: null }))
     startSearch(async () => {
-      const res = await buscarPartidasConEntregados(q)
-      if (!res.ok) {
-        setErrorMsg(res.error)
-        setResultados(null)
-        return
+      try {
+        const res = await buscarPartidasConEntregados(q)
+        if (!res.ok) {
+          setState((prev) => ({
+            ...prev,
+            buscado: q,
+            resultados: null,
+            errorMsg: res.error,
+          }))
+          return
+        }
+        setState((prev) => ({
+          ...prev,
+          buscado: q,
+          resultados: res.rows,
+          errorMsg: null,
+        }))
+      } catch {
+        setState((prev) => ({
+          ...prev,
+          buscado: q,
+          resultados: null,
+          errorMsg:
+            'No pudimos buscar las partidas. Revisá la conexión e intentá nuevamente.',
+        }))
       }
-      setBuscado(q)
-      setResultados(res.rows)
     })
   }
 
@@ -302,7 +358,9 @@ function StepBuscarPartida({
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) =>
+              setState((prev) => ({ ...prev, query: e.target.value }))
+            }
             placeholder="Buscar por OT, partida o número de pedido..."
             className="w-full rounded-lg border border-input bg-white py-2.5 pl-9 pr-3 text-sm"
             autoFocus
@@ -326,7 +384,7 @@ function StepBuscarPartida({
 
       {!errorMsg && resultados !== null && resultados.length === 0 && (
         <p className="rounded-lg border bg-muted/50 p-4 text-center text-sm text-muted-foreground">
-          No se encontraron partidas con rollos entregados para "{buscado}".
+          No se encontraron partidas con rollos entregados para &quot;{buscado}&quot;.
         </p>
       )}
 
@@ -382,16 +440,34 @@ function StepSeleccionarRollos({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [loading, startLoad] = useTransition()
   const [loaded, setLoaded] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
-    if (loaded) return
     startLoad(async () => {
-      const data = await getRollosEntregadosByIngreso(ingresoId)
-      setRollos(data)
-      setSelected(new Set(data.map((r) => r.id)))
-      setLoaded(true)
+      try {
+        const result = await getRollosEntregadosByIngreso(ingresoId)
+        if (!result.ok) {
+          setErrorMsg(result.error)
+          setRollos([])
+          setSelected(new Set())
+          setLoaded(true)
+          return
+        }
+        setRollos(result.rollos)
+        setSelected(new Set(result.rollos.map((r) => r.id)))
+        setErrorMsg(null)
+        setLoaded(true)
+      } catch {
+        setErrorMsg(
+          'No pudimos cargar los rollos de la partida. Revisá la conexión e intentá nuevamente.'
+        )
+        setRollos([])
+        setSelected(new Set())
+        setLoaded(true)
+      }
     })
-  }, [ingresoId])
+  }, [ingresoId, loadAttempt])
 
   function toggleAll() {
     if (selected.size === rollos.length) setSelected(new Set())
@@ -401,7 +477,8 @@ function StepSeleccionarRollos({
   function toggleOne(id: string) {
     setSelected((prev) => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
@@ -412,6 +489,31 @@ function StepSeleccionarRollos({
     return (
       <div className="space-y-2 py-8 text-center text-sm text-muted-foreground">
         Cargando rollos de la partida...
+      </div>
+    )
+  }
+
+  if (errorMsg) {
+    return (
+      <div className="space-y-4 py-6 text-center">
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          {errorMsg}
+        </div>
+        <div className="flex justify-center gap-4">
+          <button onClick={onBack} className="text-sm font-medium text-action underline">
+            Volver
+          </button>
+          <button
+            onClick={() => {
+              setLoaded(false)
+              setErrorMsg(null)
+              setLoadAttempt((attempt) => attempt + 1)
+            }}
+            className="text-sm font-medium text-action underline"
+          >
+            Reintentar
+          </button>
+        </div>
       </div>
     )
   }
@@ -489,15 +591,16 @@ function StepMotivoSegunda({
   tiposFalla,
   onConfirmar,
   onBack,
+  pending,
 }: {
   rollos: RolloDevolucion[]
   tiposFalla: TipoFallaOption[]
   onConfirmar: (items: RolloDevolucion[], motivo: string) => void
   onBack: () => void
+  pending: boolean
 }) {
   const [motivo, setMotivo] = useState('')
   const [items, setItems] = useState<RolloDevolucion[]>(rollos)
-  const [pending, startSubmit] = useTransition()
 
   function setSegunda(rolloId: string, segunda: boolean) {
     setItems((prev) =>
@@ -514,9 +617,7 @@ function StepMotivoSegunda({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!motivo.trim()) return
-    startSubmit(async () => {
-      onConfirmar(items, motivo)
-    })
+    onConfirmar(items, motivo)
   }
 
   const totalSegunda = items.filter((r) => r.segunda).length
@@ -542,7 +643,7 @@ function StepMotivoSegunda({
       <div className="space-y-2">
         <p className="text-sm font-medium">Destino de cada rollo</p>
         <p className="text-xs text-muted-foreground">
-          Por defecto todos vuelven a stock. Activá "Segunda calidad" para los que tienen algún defecto.
+          Por defecto todos vuelven a stock. Activá &quot;Segunda calidad&quot; para los que tienen algún defecto.
         </p>
         <ul className="space-y-2">
           {items.map((r) => (
@@ -702,8 +803,10 @@ function StepExito({
 
 export default function DevolucionesWizard({
   tiposFalla,
+  patrones,
 }: {
   tiposFalla: TipoFallaOption[]
+  patrones: PatronCodigo[]
 }) {
   const [step, setStep] = useState<Step>('tipo')
   const [rollosBase, setRollosBase] = useState<RolloEntregadoInfo[]>([])
@@ -712,6 +815,9 @@ export default function DevolucionesWizard({
     devueltos: number
     errores: { rollo_id: string; error: string }[]
   } | null>(null)
+  const [partidaSearch, setPartidaSearch] = useState<PartidaSearchState>(
+    EMPTY_PARTIDA_SEARCH
+  )
   const [submitting, startSubmit] = useTransition()
 
   function reset() {
@@ -719,25 +825,40 @@ export default function DevolucionesWizard({
     setRollosBase([])
     setIngresoIdSeleccionado(null)
     setExitoData(null)
+    setPartidaSearch(EMPTY_PARTIDA_SEARCH)
+  }
+
+  function volver() {
+    const anterior = pasoAnteriorDevoluciones(
+      step,
+      Boolean(ingresoIdSeleccionado)
+    )
+    if (anterior) setStep(anterior)
   }
 
   function handleConfirmar(items: RolloDevolucion[], motivo: string) {
     startSubmit(async () => {
-      const payload: DevolucionItem[] = items.map((r) => ({
-        rolloId: r.id,
-        segunda: r.segunda,
-        fallaTipo: r.segunda ? r.fallaTipo || undefined : undefined,
-      }))
+      try {
+        const payload: DevolucionItem[] = items.map((r) => ({
+          rolloId: r.id,
+          segunda: r.segunda,
+          fallaTipo: r.segunda ? r.fallaTipo || undefined : undefined,
+        }))
 
-      const result = await devolverRollos(payload, motivo)
+        const result = await devolverRollos(payload, motivo)
 
-      if (!result.ok) {
-        toast.error(result.error)
-        return
+        if (!result.ok) {
+          toast.error(result.error)
+          return
+        }
+
+        setExitoData({ devueltos: result.devueltos, errores: result.errores })
+        setStep('exito')
+      } catch {
+        toast.error(
+          'No pudimos confirmar la devolución. Revisá la conexión e intentá nuevamente.'
+        )
       }
-
-      setExitoData({ devueltos: result.devueltos, errores: result.errores })
-      setStep('exito')
     })
   }
 
@@ -762,8 +883,21 @@ export default function DevolucionesWizard({
   return (
     <div className="mx-auto w-full max-w-2xl space-y-5 p-4 sm:p-6">
       <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h1 className="font-heading text-xl font-semibold">{title}</h1>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            {step !== 'tipo' && step !== 'exito' && (
+              <button
+                type="button"
+                onClick={volver}
+                className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-md px-2 text-sm font-medium text-action hover:bg-action/10"
+                aria-label="Volver al paso anterior"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span className="hidden sm:inline">Volver</span>
+              </button>
+            )}
+            <h1 className="truncate font-heading text-xl font-semibold">{title}</h1>
+          </div>
           {step !== 'tipo' && step !== 'exito' && (
             <button
               onClick={reset}
@@ -778,14 +912,22 @@ export default function DevolucionesWizard({
 
       {step === 'tipo' && (
         <StepElegirTipo
-          onPorRollo={() => setStep('scan_rollos')}
-          onPorPartida={() => setStep('buscar_partida')}
+          onPorRollo={() => {
+            setIngresoIdSeleccionado(null)
+            setStep('scan_rollos')
+          }}
+          onPorPartida={() => {
+            setIngresoIdSeleccionado(null)
+            setRollosBase([])
+            setStep('buscar_partida')
+          }}
         />
       )}
 
       {step === 'scan_rollos' && (
         <StepScanRollos
           rollos={rollosBase}
+          patrones={patrones}
           onRolloAdded={(r) => setRollosBase((prev) => [...prev, r])}
           onRolloRemoved={(id) =>
             setRollosBase((prev) => prev.filter((r) => r.id !== id))
@@ -796,6 +938,8 @@ export default function DevolucionesWizard({
 
       {step === 'buscar_partida' && (
         <StepBuscarPartida
+          state={partidaSearch}
+          setState={setPartidaSearch}
           onPartidaSeleccionada={(ingresoId) => {
             setIngresoIdSeleccionado(ingresoId)
             setStep('seleccionar_rollos')
@@ -805,6 +949,7 @@ export default function DevolucionesWizard({
 
       {step === 'seleccionar_rollos' && ingresoIdSeleccionado && (
         <StepSeleccionarRollos
+          key={ingresoIdSeleccionado}
           ingresoId={ingresoIdSeleccionado}
           onContinuar={toMotivoSegunda}
           onBack={() => setStep('buscar_partida')}
@@ -816,6 +961,7 @@ export default function DevolucionesWizard({
           rollos={rollosBase.map((r) => ({ ...r, segunda: false, fallaTipo: '' }))}
           tiposFalla={tiposFalla}
           onConfirmar={handleConfirmar}
+          pending={submitting}
           onBack={() =>
             setStep(
               ingresoIdSeleccionado ? 'seleccionar_rollos' : 'scan_rollos'
