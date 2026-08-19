@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import { Camera, QrCode, Barcode, X, RefreshCw } from 'lucide-react'
 import {
   crearIngreso,
+  descartarPlanillaTemporal,
+  prepararSubidaPlanilla,
   procesarPlanillaConIA,
   subirFotoFalla,
   type RolloInput,
@@ -24,6 +26,13 @@ import SearchableCombobox from '@/components/SearchableCombobox'
 import type { CodeScannerResult } from '@/components/CodeScanner'
 import { extraerCodigoCandidato } from '@/lib/scanner'
 import type { PatronCodigo } from '@/lib/scanner'
+import {
+  formatBytes,
+  MAX_PLANILLA_BYTES,
+  MIME_TYPES_ACEPTADOS,
+  PLANILLAS_BUCKET,
+  validarArchivoPlanilla,
+} from '@/lib/storage/planillaArchivo'
 
 type PatronConTintoreria = PatronCodigo & { tintoreria_id: string | null }
 
@@ -214,6 +223,7 @@ export default function NuevoIngresoForm({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [imagenPath, setImagenPath] = useState<string | null>(null)
   const [extrayendo, setExtrayendo] = useState(false)
+  const [etapaIA, setEtapaIA] = useState<'subiendo' | 'procesando' | null>(null)
   const [extraccionError, setExtraccionError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [confianzas, setConfianzas] = useState<Confianzas | null>(null)
@@ -440,10 +450,17 @@ export default function NuevoIngresoForm({
   }
 
   function resetIA() {
+    const pathTemporal = imagenPath
+    if (pathTemporal) {
+      void descartarPlanillaTemporal(pathTemporal).catch((error) =>
+        console.error('[extraccion] no se pudo limpiar la planilla temporal', error)
+      )
+    }
     setArchivo(null)
     setPreviewUrl(null)
     setImagenPath(null)
     setExtrayendo(false)
+    setEtapaIA(null)
     setExtraccionError(null)
     setWarnings([])
     setConfianzas(null)
@@ -460,6 +477,13 @@ export default function NuevoIngresoForm({
       setExtraccionError('Primero seleccioná la tintorería arriba.')
       return
     }
+
+    const validacion = validarArchivoPlanilla(file.type, file.size)
+    if (!validacion.ok) {
+      setExtraccionError(validacion.error)
+      return
+    }
+
     setArchivo(file)
     setExtraccionError(null)
     setWarnings([])
@@ -473,22 +497,79 @@ export default function NuevoIngresoForm({
       setPreviewUrl(null)
     }
 
-    setExtrayendo(true)
-    const formData = new FormData()
-    formData.set('archivo', file)
-    formData.set('tintoreria_id', tintoreriaId)
-    const result = await procesarPlanillaConIA(formData)
-    setExtrayendo(false)
+    await ejecutarExtraccion(file)
+  }
 
-    if (!result.ok) {
-      setExtraccionError(result.error)
-      if (result.imagen_path) setImagenPath(result.imagen_path)
+  async function ejecutarExtraccion(file: File, pathExistente?: string) {
+    setExtrayendo(true)
+    setExtraccionError(null)
+    setWarnings([])
+    setConfianzas(null)
+
+    try {
+      let path = pathExistente
+
+      if (!path) {
+        setEtapaIA('subiendo')
+        const preparacion = await prepararSubidaPlanilla({
+          mime_type: file.type,
+          size: file.size,
+        })
+        if (!preparacion.ok) {
+          setExtraccionError(preparacion.error)
+          return
+        }
+
+        const supabase = createClient()
+        const { error: uploadError } = await supabase.storage
+          .from(PLANILLAS_BUCKET)
+          .uploadToSignedUrl(preparacion.path, preparacion.token, file, {
+            contentType: file.type,
+          })
+        if (uploadError) {
+          setExtraccionError(`No se pudo subir la planilla: ${uploadError.message}`)
+          return
+        }
+
+        path = preparacion.path
+        setImagenPath(path)
+      }
+
+      setEtapaIA('procesando')
+      const result = await procesarPlanillaConIA({
+        imagen_path: path,
+        mime_type: file.type,
+        tintoreria_id: tintoreriaId,
+      })
+
+      if (!result.ok) {
+        setExtraccionError(result.error)
+        if (result.imagen_path) setImagenPath(result.imagen_path)
+        return
+      }
+
+      setImagenPath(result.imagen_path)
+      setWarnings(result.warnings)
+      aplicarDatosIA(result.datos)
+    } catch (error) {
+      console.error('[extraccion] error inesperado en carga directa', error)
+      setExtraccionError(
+        'Se interrumpió la carga o el procesamiento. Revisá tu conexión y volvé a intentar.'
+      )
+    } finally {
+      setExtrayendo(false)
+      setEtapaIA(null)
+    }
+  }
+
+  async function reintentarExtraccionIA() {
+    if (!archivo) return
+    const validacion = validarArchivoPlanilla(archivo.type, archivo.size)
+    if (!validacion.ok) {
+      setExtraccionError(validacion.error)
       return
     }
-
-    setImagenPath(result.imagen_path)
-    setWarnings(result.warnings)
-    aplicarDatosIA(result.datos)
+    await ejecutarExtraccion(archivo, imagenPath ?? undefined)
   }
 
   function aplicarDatosIA(datos: IngresoExtraido) {
@@ -933,22 +1014,24 @@ export default function NuevoIngresoForm({
         <button
           type="button"
           onClick={() => cambiarModo('manual')}
+          disabled={extrayendo}
           className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
             modo === 'manual'
               ? 'bg-primary text-primary-foreground'
               : 'bg-zinc-100 hover:bg-zinc-200'
-          }`}
+          } disabled:cursor-not-allowed disabled:opacity-60`}
         >
           Cargar a mano
         </button>
         <button
           type="button"
           onClick={() => cambiarModo('ia')}
+          disabled={extrayendo}
           className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
             modo === 'ia'
               ? 'bg-primary text-primary-foreground'
               : 'bg-zinc-100 hover:bg-zinc-200'
-          }`}
+          } disabled:cursor-not-allowed disabled:opacity-60`}
         >
           Planilla con IA
         </button>
@@ -1035,9 +1118,15 @@ export default function NuevoIngresoForm({
                 <div className="flex items-center gap-3 rounded-md bg-zinc-50 px-4 py-6 text-sm">
                   <Spinner />
                   <div>
-                    <p className="font-medium">Procesando planilla con IA...</p>
+                    <p className="font-medium">
+                      {etapaIA === 'subiendo'
+                        ? 'Subiendo planilla de forma segura...'
+                        : 'Procesando planilla con IA...'}
+                    </p>
                     <p className="text-xs text-muted-foreground">
-                      Esto suele tomar 5-10 segundos.
+                      {etapaIA === 'subiendo'
+                        ? 'Podés usar la foto o PDF original, sin achicarlo.'
+                        : 'Esto puede tomar algunos segundos.'}
                     </p>
                   </div>
                 </div>
@@ -1052,15 +1141,15 @@ export default function NuevoIngresoForm({
                     {extraccionError}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        archivo && handleArchivoSeleccionado(archivo)
-                      }
-                      className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                    >
-                      Reintentar IA
-                    </button>
+                    {archivo && (
+                      <button
+                        type="button"
+                        onClick={reintentarExtraccionIA}
+                        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                      >
+                        Reintentar IA
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => cambiarModo('manual')}
@@ -1099,7 +1188,7 @@ export default function NuevoIngresoForm({
                         {archivo.name}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {(archivo.size / 1024).toFixed(1)} KB · datos extraídos
+                        {formatBytes(archivo.size)} · datos extraídos
                       </p>
                     </div>
                     <button
@@ -2534,12 +2623,12 @@ function UploadArea({
         Arrastrá la planilla acá o tocá para elegir
       </p>
       <p className="text-xs text-muted-foreground text-center">
-        JPG, PNG, WebP, HEIC o PDF
+        JPG, PNG, WebP, HEIC o PDF · hasta {formatBytes(MAX_PLANILLA_BYTES)}
       </p>
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,application/pdf"
+        accept={MIME_TYPES_ACEPTADOS}
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0]

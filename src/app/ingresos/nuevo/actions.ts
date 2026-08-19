@@ -8,6 +8,14 @@ import {
   UMBRAL_BAJA_CONFIANZA,
 } from '@/lib/extraccion/extraerPlanilla'
 import { subirPlanilla } from '@/lib/storage/planillas'
+import {
+  construirPathPlanilla,
+  esPathPlanillaDeEmpresa,
+  MIME_PLANILLAS_ACEPTADOS,
+  PLANILLAS_BUCKET,
+  validarArchivoPlanilla,
+  type MimePlanilla,
+} from '@/lib/storage/planillaArchivo'
 import { validarUbicacionActiva } from '@/lib/ubicacionesServer'
 
 // ── Tipos del flow manual + IA ─────────────────────────────
@@ -64,11 +72,15 @@ export type ProcesarPlanillaResult =
       ok: false
       error: string
       codigo:
-        | 'NO_FILE'
+        | 'NO_PATH'
         | 'NO_TINTORERIA'
+        | 'TINTORERIA_NO_AUTORIZADA'
         | 'TIPO_INVALIDO'
+        | 'ARCHIVO_VACIO'
+        | 'ARCHIVO_MUY_GRANDE'
         | 'NO_AUTH'
         | 'SIN_EMPRESA'
+        | 'ROL_NO_AUTORIZADO'
         | 'STORAGE_ERROR'
         | 'GEMINI_ERROR'
         | 'JSON_INVALID'
@@ -79,15 +91,26 @@ export type ProcesarPlanillaResult =
       imagen_path?: string
     }
 
-const MIME_ACEPTADOS = [
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-  'application/pdf',
-]
+export type PrepararSubidaPlanillaResult =
+  | { ok: true; path: string; token: string }
+  | {
+      ok: false
+      error: string
+      codigo:
+        | 'TIPO_INVALIDO'
+        | 'ARCHIVO_VACIO'
+        | 'ARCHIVO_MUY_GRANDE'
+        | 'NO_AUTH'
+        | 'SIN_EMPRESA'
+        | 'ROL_NO_AUTORIZADO'
+        | 'STORAGE_ERROR'
+    }
+
+export type ProcesarPlanillaInput = {
+  imagen_path: string
+  mime_type: string
+  tintoreria_id: string
+}
 
 const MIME_FOTOS = [
   'image/jpeg',
@@ -99,29 +122,87 @@ const MIME_FOTOS = [
 ]
 
 /**
+ * Genera un permiso temporal para que el navegador suba directo a Supabase.
+ * Por esta Server Action solo viajan metadatos: el archivo nunca atraviesa el
+ * body de Vercel/Next.js.
+ */
+export async function prepararSubidaPlanilla(input: {
+  mime_type: string
+  size: number
+}): Promise<PrepararSubidaPlanillaResult> {
+  const validacion = validarArchivoPlanilla(input?.mime_type ?? '', input?.size)
+  if (!validacion.ok) return validacion
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return { ok: false, error: 'Sesión expirada — volvé a iniciar sesión.', codigo: 'NO_AUTH' }
+  }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('empresa_id, role')
+    .eq('id', user.id)
+    .single()
+  if (!profile?.empresa_id) {
+    return {
+      ok: false,
+      error: 'Tu usuario no tiene empresa asignada.',
+      codigo: 'SIN_EMPRESA',
+    }
+  }
+  if (!['admin', 'operario'].includes(profile.role)) {
+    return {
+      ok: false,
+      error: 'Tu rol no tiene permiso para cargar ingresos.',
+      codigo: 'ROL_NO_AUTORIZADO',
+    }
+  }
+
+  const path = construirPathPlanilla(profile.empresa_id, validacion.mimeType)
+  const { data, error } = await supabase.storage
+    .from(PLANILLAS_BUCKET)
+    .createSignedUploadUrl(path, { upsert: false })
+
+  if (error || !data?.token) {
+    return {
+      ok: false,
+      error: `No se pudo preparar la subida: ${error?.message ?? 'error desconocido'}`,
+      codigo: 'STORAGE_ERROR',
+    }
+  }
+
+  return { ok: true, path, token: data.token }
+}
+
+/**
  * Procesa una planilla con IA aplicando el prompt custom de la tintorería
- * elegida. Si la tintorería no tiene `extraction_prompt`, usa el default.
+ * elegida. El archivo ya está en Storage: la acción recibe solo el path para
+ * no quedar limitada por el body máximo de Server Actions/Vercel.
  */
 export async function procesarPlanillaConIA(
-  formData: FormData
+  input: ProcesarPlanillaInput
 ): Promise<ProcesarPlanillaResult> {
-  const file = formData.get('archivo')
-  const tintoreriaId = formData.get('tintoreria_id')
+  const imagenPath = input?.imagen_path?.trim()
+  const mimeType = input?.mime_type?.trim()
+  const tintoreriaId = input?.tintoreria_id?.trim()
 
-  if (!(file instanceof File)) {
-    return { ok: false, error: 'No se recibió archivo.', codigo: 'NO_FILE' }
+  if (!imagenPath) {
+    return { ok: false, error: 'No se recibió el archivo subido.', codigo: 'NO_PATH' }
   }
-  if (typeof tintoreriaId !== 'string' || !tintoreriaId.trim()) {
+  if (!tintoreriaId) {
     return {
       ok: false,
       error: 'Hay que seleccionar la tintorería antes de subir la planilla.',
       codigo: 'NO_TINTORERIA',
     }
   }
-  if (!MIME_ACEPTADOS.includes(file.type)) {
+  if (!MIME_PLANILLAS_ACEPTADOS.includes(mimeType as MimePlanilla)) {
     return {
       ok: false,
-      error: `Tipo de archivo no soportado: ${file.type}. Aceptamos JPG, PNG, WebP, HEIC y PDF.`,
+      error: `Tipo de archivo no soportado: ${mimeType || 'desconocido'}. Aceptamos JPG, PNG, WebP, HEIC y PDF.`,
       codigo: 'TIPO_INVALIDO',
     }
   }
@@ -136,7 +217,7 @@ export async function procesarPlanillaConIA(
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('empresa_id')
+    .select('empresa_id, role')
     .eq('id', user.id)
     .single()
   if (!profile?.empresa_id) {
@@ -146,29 +227,97 @@ export async function procesarPlanillaConIA(
       codigo: 'SIN_EMPRESA',
     }
   }
+  if (!['admin', 'operario'].includes(profile.role)) {
+    return {
+      ok: false,
+      error: 'Tu rol no tiene permiso para cargar ingresos.',
+      codigo: 'ROL_NO_AUTORIZADO',
+    }
+  }
 
-  const { data: tintoreria } = await supabase
+  const mimePlanilla = mimeType as MimePlanilla
+  if (!esPathPlanillaDeEmpresa(imagenPath, profile.empresa_id, mimePlanilla)) {
+    return {
+      ok: false,
+      error: 'El archivo no pertenece a tu empresa o su path es inválido.',
+      codigo: 'NO_PATH',
+    }
+  }
+
+  // No alcanza con que la tintorería exista globalmente: debe estar asociada
+  // y activa para la empresa del usuario que está procesando el remito.
+  const { data: vinculacion, error: vinculacionError } = await supabase
+    .from('empresa_tintorerias')
+    .select('tintoreria_id')
+    .eq('empresa_id', profile.empresa_id)
+    .eq('tintoreria_id', tintoreriaId)
+    .eq('activo', true)
+    .maybeSingle()
+
+  if (vinculacionError) {
+    return {
+      ok: false,
+      error: `No se pudo validar la tintorería: ${vinculacionError.message}`,
+      codigo: 'OTHER',
+      imagen_path: imagenPath,
+    }
+  }
+  if (!vinculacion) {
+    return {
+      ok: false,
+      error: 'La tintorería seleccionada no está asociada a tu empresa.',
+      codigo: 'TINTORERIA_NO_AUTORIZADA',
+      imagen_path: imagenPath,
+    }
+  }
+
+  const { data: tintoreria, error: tintoreriaError } = await supabase
     .from('tintorerias')
     .select('extraction_prompt')
     .eq('id', tintoreriaId)
     .single()
 
-  const customPrompt = tintoreria?.extraction_prompt ?? null
-
-  const buffer = Buffer.from(await file.arrayBuffer())
-
-  const upload = await subirPlanilla(buffer, file.type, profile.empresa_id)
-  if (!upload.ok) {
-    return { ok: false, error: upload.error, codigo: 'STORAGE_ERROR' }
+  if (tintoreriaError || !tintoreria) {
+    return {
+      ok: false,
+      error: `No se pudo cargar el prompt de la tintorería: ${tintoreriaError?.message ?? 'no encontrada'}`,
+      codigo: 'OTHER',
+      imagen_path: imagenPath,
+    }
   }
 
-  const extraccion = await extraerPlanilla(buffer, file.type, customPrompt)
+  const customPrompt = tintoreria?.extraction_prompt ?? null
+
+  const { data: archivo, error: descargaError } = await supabase.storage
+    .from(PLANILLAS_BUCKET)
+    .download(imagenPath)
+  if (descargaError || !archivo) {
+    return {
+      ok: false,
+      error: `No se pudo recuperar la planilla subida: ${descargaError?.message ?? 'archivo no encontrado'}`,
+      codigo: 'STORAGE_ERROR',
+      imagen_path: imagenPath,
+    }
+  }
+
+  const validacionArchivo = validarArchivoPlanilla(mimePlanilla, archivo.size)
+  if (!validacionArchivo.ok) {
+    return {
+      ok: false,
+      error: validacionArchivo.error,
+      codigo: validacionArchivo.codigo,
+      imagen_path: imagenPath,
+    }
+  }
+
+  const buffer = Buffer.from(await archivo.arrayBuffer())
+  const extraccion = await extraerPlanilla(buffer, mimePlanilla, customPrompt)
   if (!extraccion.ok) {
     return {
       ok: false,
       error: extraccion.error,
       codigo: extraccion.codigo,
-      imagen_path: upload.path,
+      imagen_path: imagenPath,
     }
   }
 
@@ -176,10 +325,53 @@ export async function procesarPlanillaConIA(
 
   return {
     ok: true,
-    imagen_path: upload.path,
+    imagen_path: imagenPath,
     datos: extraccion.data,
     warnings,
   }
+}
+
+/**
+ * Limpia una subida abandonada al cambiar de archivo o volver al modo manual.
+ * Nunca elimina una planilla que ya esté referenciada por un ingreso.
+ */
+export async function descartarPlanillaTemporal(
+  imagenPath: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Sesión expirada.' }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('empresa_id, role')
+    .eq('id', user.id)
+    .single()
+  if (!profile?.empresa_id) return { ok: false, error: 'Usuario sin empresa.' }
+  if (!['admin', 'operario'].includes(profile.role)) {
+    return { ok: false, error: 'Tu rol no tiene permiso para cargar ingresos.' }
+  }
+
+  const pathValido = MIME_PLANILLAS_ACEPTADOS.some((mime) =>
+    esPathPlanillaDeEmpresa(imagenPath, profile.empresa_id, mime)
+  )
+  if (!pathValido) return { ok: false, error: 'Path de planilla inválido.' }
+
+  const { data: ingreso, error: ingresoError } = await supabase
+    .from('ingresos')
+    .select('id')
+    .eq('imagen_url', imagenPath)
+    .limit(1)
+    .maybeSingle()
+  if (ingresoError) return { ok: false, error: ingresoError.message }
+  if (ingreso) return { ok: false, error: 'La planilla ya pertenece a un ingreso.' }
+
+  const { error } = await supabase.storage
+    .from(PLANILLAS_BUCKET)
+    .remove([imagenPath])
+  return error ? { ok: false, error: error.message } : { ok: true }
 }
 
 /** Banners de fallback 3-tier: incompleto + calidad pobre. */

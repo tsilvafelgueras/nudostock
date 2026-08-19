@@ -403,8 +403,10 @@ Todas idempotentes, todas pegadas en Supabase SQL Editor.
 
 | 064 | **Tipos de falla configurables** (iteración 2026-07-22). Nueva tabla `tipos_falla` (id, empresa_id, nombre, activo, orden). DROP de `rollos_falla_categoria_check` (CHECK enum hardcodeado). Normalización de datos históricos: `'mancha'` → `'Mancha'`, `'agujero'` → `'Agujero'`, etc. (Title Case). Seed de 14 categorías para todas las empresas existentes. Admin gestiona desde `/admin/fallas`. Los dropdowns de ingreso y stock se alimentan dinámicamente desde esta tabla. |
 | 065 | **Módulo de devoluciones** (iteración 2026-07-22). RPC `devolver_rollos_deposito(p_items jsonb, p_motivo text)`: acepta array de `{rollo_id, segunda, falla_categoria}`, valida `estado='entregado'`, transiciona a `en_stock`/`segunda`, setea `liberado_at` en `pedido_rollos`, appenda traza al `rollos.comentario`, crea notificación y log de movimiento. RPC `buscar_partidas_con_entregados(p_query text)`: busca ingresos con rollos entregados por OT/remito/lote. RPC auxiliar `rollos_entregados_por_ingreso(p_ingreso_id uuid)`. |
+| 066–068 | Correcciones sucesivas de las RPC de búsqueda del módulo de devoluciones: firma de retorno, `DROP + CREATE`, `LEFT JOIN` y recarga del schema de PostgREST. |
+| 069 | **Consistencia integral de devoluciones** (iteración 2026-08-19). Define como devolvible únicamente un rollo `entregado` con `pedido_rollos` activo; usa el mismo criterio para buscar partidas y abrir su detalle. Agrega `buscar_rollo_entregado_por_codigos(text[])`, tolerancia segura a ceros iniciales y devuelve artículo/color/tintorería desde SQL para evitar embeds ambiguos de PostgREST. Las RPC quedan limitadas a operario/admin de la empresa autenticada. |
 
-**Schema canónico**: ✅ `supabase/schema.sql` refleja el modelo actual (post-039). Para DB nueva: correr `schema.sql` y después las migraciones `040`..`065` en orden.
+**Schema canónico**: ✅ `supabase/schema.sql` refleja el modelo base post-039. Para DB nueva: correr `schema.sql` y después las migraciones `040`..`069` en orden.
 
 ---
 
@@ -2068,3 +2070,76 @@ src/app/rollos-sin-etiqueta/
 ### Estado del branch (2026-07-21)
 
 `development` mergeado a `main` con `--no-ff`. Vercel redesplegó automático. **Migración 063 pendiente de aplicar en Supabase** (SQL Editor del proyecto).
+
+---
+
+## 10.17. Iteración 2026-08 — Carga directa de remitos para extracción IA
+
+### Bug: fotos de remitos no llegaban a Gemini
+
+**Síntoma**: al subir una foto o PDF desde `/ingresos/nuevo`, la UI podía
+quedar indefinidamente en "Procesando planilla con IA" sin extraer datos.
+
+**Causa**: el navegador enviaba el archivo completo a
+`procesarPlanillaConIA` como `FormData`. Next.js limita por defecto el body de
+una Server Action a 1 MB y Vercel aplica además su propio límite de payload.
+Las fotos normales de celular podían ser rechazadas antes de que se ejecutara
+la acción, por lo que el archivo nunca llegaba a Storage ni a Gemini. La UI no
+tenía `try/catch/finally`, así que tampoco salía del estado de carga.
+
+### Solución en `development`
+
+- El backend genera un permiso temporal con `createSignedUploadUrl` y un path
+  `{empresa_id}/{yyyy-mm}/{uuid}.{ext}`.
+- El navegador sube el archivo directamente al bucket privado `planillas` con
+  `uploadToSignedUrl`; por la Server Action pasan solamente metadatos y el path.
+- `procesarPlanillaConIA` valida sesión, empresa, formato de path y asociación
+  activa con la tintorería; después descarga el archivo desde Storage y lo
+  envía a Gemini.
+- El `extraction_prompt` interno de la tintorería se conserva sin cambios. Si
+  es NULL, Gemini sigue usando las instrucciones genéricas.
+- Reintentar IA reutiliza el objeto ya subido, sin pedir otra carga al cliente.
+- La UI distingue "Subiendo" de "Procesando", captura rechazos inesperados y
+  siempre libera el spinner con `finally`.
+- Límite de la app: 14 MB por archivo. Deja margen para la codificación base64,
+  el prompt y el schema dentro del máximo inline de Gemini.
+- `descartarPlanillaTemporal` limpia archivos abandonados explícitamente y se
+  niega a borrar objetos ya referenciados por un ingreso.
+
+No requiere dependencia nueva ni migración SQL; reutiliza el bucket y sus
+políticas RLS existentes.
+
+**Pruebas agregadas**:
+- `src/lib/extraccion/gemini.test.ts`
+- `src/lib/storage/planillaArchivo.test.ts`
+- `src/app/ingresos/nuevo/actions.extraccion.test.ts`
+
+---
+
+## 10.18. Iteración 2026-08-19 — Corrección integral de devoluciones
+
+### Problemas corregidos
+
+- `/devoluciones` no tenía layout propio y se mostraba sin navbar.
+- El wizard no permitía volver paso por paso ni conservaba una búsqueda de
+  partida al regresar desde el detalle.
+- El escaneo usaba el payload crudo sin los patrones de código configurados.
+- La búsqueda por rollo intentaba embeber `colores` mediante PostgREST, una
+  relación que falla en este esquema, y ocultaba el error real.
+- La búsqueda de partidas contaba cualquier rollo `entregado`, pero el detalle
+  exigía además una asignación activa; una partida podía aparecer y abrir vacía.
+- Los errores de la RPC de detalle se convertían silenciosamente en `[]`.
+
+### Solución
+
+- Nuevo `src/app/devoluciones/layout.tsx` con `AppShell` y guard operario/admin.
+- Botón Volver contextual en cada etapa y estado de búsqueda levantado al
+  wizard para preservarlo.
+- Se cargan los patrones aplicables de las tintorerías asociadas a la empresa;
+  un scan genera candidatos y el backend valida cuál corresponde a un rollo
+  realmente devolvible. El ingreso manual sigue usando el texto exacto.
+- Migración `069_devoluciones_consistencia.sql`: las tres RPC de lectura usan el
+  mismo universo (`rollos.estado='entregado'` + `pedido_rollos` activo), retornan
+  todos los datos necesarios y muestran los errores técnicos en la UI.
+- Tests nuevos en `src/lib/devoluciones.test.ts` y
+  `src/app/devoluciones/actions.test.ts`.

@@ -14,18 +14,14 @@
  */
 
 import { createClient } from '@/lib/supabase/server'
+import {
+  construirPathPlanilla,
+  EXTENSION_POR_MIME,
+  PLANILLAS_BUCKET,
+  type MimePlanilla,
+} from './planillaArchivo'
 
-const BUCKET = 'planillas'
-
-const EXT_POR_MIME: Record<string, string> = {
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/heic': 'heic',
-  'image/heif': 'heif',
-  'application/pdf': 'pdf',
-}
+export { MIME_TYPES_ACEPTADOS } from './planillaArchivo'
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60 // 1 hora
 
@@ -47,7 +43,7 @@ export async function subirPlanilla(
   mimeType: string,
   empresaId: string
 ): Promise<SubirPlanillaResult> {
-  const ext = EXT_POR_MIME[mimeType]
+  const ext = EXTENSION_POR_MIME[mimeType as MimePlanilla]
   if (!ext) {
     return {
       ok: false,
@@ -55,13 +51,11 @@ export async function subirPlanilla(
     }
   }
 
-  const yyyyMm = new Date().toISOString().slice(0, 7) // 'YYYY-MM'
-  const uuid = crypto.randomUUID()
-  const path = `${empresaId}/${yyyyMm}/${uuid}.${ext}`
+  const path = construirPathPlanilla(empresaId, mimeType as MimePlanilla)
 
   const supabase = await createClient()
   const { error } = await supabase.storage
-    .from(BUCKET)
+    .from(PLANILLAS_BUCKET)
     .upload(path, fileBuffer, {
       contentType: mimeType,
       upsert: false,
@@ -81,7 +75,7 @@ export async function subirPlanilla(
 export async function getSignedUrl(path: string): Promise<SignedUrlResult> {
   const supabase = await createClient()
   const { data, error } = await supabase.storage
-    .from(BUCKET)
+    .from(PLANILLAS_BUCKET)
     .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
 
   if (error || !data?.signedUrl) {
@@ -93,8 +87,3 @@ export async function getSignedUrl(path: string): Promise<SignedUrlResult> {
 
   return { ok: true, url: data.signedUrl }
 }
-
-/**
- * Lista de mime types aceptados, expuesta para el `accept` del input file.
- */
-export const MIME_TYPES_ACEPTADOS = Object.keys(EXT_POR_MIME).join(',')

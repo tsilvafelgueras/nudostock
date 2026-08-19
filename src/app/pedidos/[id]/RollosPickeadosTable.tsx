@@ -14,6 +14,9 @@ export type RolloPickeadoRow = {
   kilos: number | null
   ubicacion: string | null
   pickeadoAt: string | null
+  devueltoAt: string | null
+  devueltoMotivo: string | null
+  liberadoAt: string | null
   ot: string | null
   partidaRealLote: string | null
   partidaSolicitadaLote: string | null
@@ -72,14 +75,19 @@ export default function RollosPickeadosTable({
               <th className="px-4 py-2 font-medium">Partida real</th>
               <th className="px-4 py-2 font-medium">OT</th>
               <th className="px-4 py-2 font-medium">Ubicacion</th>
-              <th className="px-4 py-2 font-medium">Picking</th>
+              <th className="px-4 py-2 font-medium">Estado</th>
               {puedeQuitar && <th className="px-4 py-2 text-right font-medium"></th>}
             </tr>
           </thead>
           <tbody>
             {itemsLocales.length > 0 ? (
               itemsLocales.map((r) => (
-                <tr key={r.pedidoRolloId} className="border-b last:border-0">
+                <tr
+                  key={r.pedidoRolloId}
+                  className={`border-b last:border-0 ${
+                    r.devueltoAt ? 'bg-zinc-50/80' : ''
+                  }`}
+                >
                   <td className="px-4 py-2 font-medium">{r.numeroPieza}</td>
                   <td className="px-4 py-2">{r.articulo ?? '-'}</td>
                   <td className="px-4 py-2">{r.color}</td>
@@ -103,7 +111,21 @@ export default function RollosPickeadosTable({
                     {r.ubicacion ?? '-'}
                   </td>
                   <td className="px-4 py-2 text-xs">
-                    {r.pickeadoAt ? (
+                    {r.devueltoAt ? (
+                      <div>
+                        <span className="inline-flex rounded-full bg-warning/15 px-2 py-0.5 font-medium text-warning">
+                          Devuelto
+                        </span>
+                        <span className="mt-1 block text-[11px] text-muted-foreground">
+                          {new Date(r.devueltoAt).toLocaleString('es-AR')}
+                        </span>
+                        {r.devueltoMotivo && (
+                          <span className="block max-w-48 text-[11px] text-muted-foreground">
+                            {r.devueltoMotivo}
+                          </span>
+                        )}
+                      </div>
+                    ) : r.pickeadoAt ? (
                       <span className="text-success">Pickeado</span>
                     ) : (
                       <span className="text-muted-foreground">Pendiente</span>
@@ -111,13 +133,17 @@ export default function RollosPickeadosTable({
                   </td>
                   {puedeQuitar && (
                     <td className="px-4 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setQuitarTarget(r)}
-                        className="rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/5"
-                      >
-                        Quitar
-                      </button>
+                      {!r.devueltoAt && !r.liberadoAt ? (
+                        <button
+                          type="button"
+                          onClick={() => setQuitarTarget(r)}
+                          className="rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/5"
+                        >
+                          Quitar
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                   )}
                 </tr>

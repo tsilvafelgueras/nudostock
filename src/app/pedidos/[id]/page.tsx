@@ -17,6 +17,7 @@ import RollosPickeadosTable, {
 import QuitarPartidaButton from './QuitarPartidaButton'
 import DevolucionParcialSection from './DevolucionParcialSection'
 import { estadoPedidoBadge } from '@/lib/estadoPedido'
+import { estadoPedidoRollo } from '@/lib/devoluciones'
 
 type PedidoPartidaRaw = {
   id: string
@@ -38,6 +39,8 @@ type PedidoRolloRaw = {
   pedido_partida_id: string | null
   pickeado_at: string | null
   devuelto_at: string | null
+  devuelto_motivo: string | null
+  liberado_at: string | null
   rollos: {
     id: string
     numero_pieza: string
@@ -166,6 +169,8 @@ export default async function PedidoDetailPage({
             pedido_partida_id,
             pickeado_at,
             devuelto_at,
+            devuelto_motivo,
+            liberado_at,
             rollos (
               id,
               numero_pieza,
@@ -181,8 +186,7 @@ export default async function PedidoDetailPage({
           `
         )
         .eq('pedido_id', id)
-        .is('liberado_at', null)
-        .is('devuelto_at', null),
+        .order('created_at', { ascending: true }),
       supabase.from('colores').select('id, nombre'),
       getUbicacionesActivas(supabase),
     ])
@@ -219,6 +223,7 @@ export default async function PedidoDetailPage({
 
   const rollos = ((prRaw ?? []) as unknown as PedidoRolloRaw[])
     .filter((r) => r.rollos != null)
+    .filter((r) => estadoPedidoRollo(r) !== 'liberado')
     .map((r) => {
       const partidaSolicitada = r.pedido_partida_id
         ? partidaById.get(r.pedido_partida_id)
@@ -250,18 +255,31 @@ export default async function PedidoDetailPage({
     kilos: r.rollos.kilos,
     ubicacion: r.rollos.ubicacion,
     pickeadoAt: r.pickeado_at,
+    devueltoAt: r.devuelto_at,
+    devueltoMotivo: r.devuelto_motivo,
+    liberadoAt: r.liberado_at,
     ot: r.rollos.ingresos?.ot ?? null,
     partidaRealLote: r.partidaRealLote,
     partidaSolicitadaLote: r.partidaSolicitadaLote,
     esSustitucionPartida: r.esSustitucionPartida,
   }))
 
+  const rollosActivos = rollos.filter(
+    (r) => estadoPedidoRollo(r) === 'activo'
+  )
+  const rollosActivosRows = rollosRows.filter(
+    (r) => !r.devueltoAt && !r.liberadoAt
+  )
+  const totalDevueltos = rollos.filter(
+    (r) => estadoPedidoRollo(r) === 'devuelto'
+  ).length
+
   const totalSolicitado = partidas.reduce(
     (acc, p) => acc + Number(p.rollos_solicitados ?? 0),
     0
   )
-  const totalReal = rollos.length
-  const kilosReales = rollos.reduce(
+  const totalReal = rollosActivos.length
+  const kilosReales = rollosActivos.reduce(
     (acc, r) => acc + Number(r.rollos?.kilos ?? 0),
     0
   )
@@ -327,6 +345,9 @@ export default async function PedidoDetailPage({
               : 'Pendiente de picking'
           }
         />
+        {totalDevueltos > 0 && (
+          <Field label="Devueltos" value={`${totalDevueltos} rollos`} />
+        )}
         <Field
           label="Egreso confirmado"
           value={
@@ -450,7 +471,7 @@ export default async function PedidoDetailPage({
       <section className="rounded-lg border bg-white shadow-sm overflow-hidden">
         <div className="px-4 py-3 border-b bg-zinc-50">
           <h2 className="font-semibold text-sm">
-            Rollos reales pickeados ({rollos.length})
+            Rollos del pedido ({rollos.length})
           </h2>
         </div>
         <RollosPickeadosTable
@@ -463,7 +484,7 @@ export default async function PedidoDetailPage({
       {puedeDevolver && (
         <DevolucionParcialSection
           pedidoId={pedido.id}
-          rollos={rollosRows}
+          rollos={rollosActivosRows}
         />
       )}
     </div>
