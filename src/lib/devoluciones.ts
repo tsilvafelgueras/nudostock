@@ -11,6 +11,13 @@ export type DevolucionesStep =
   | 'motivo_segunda'
   | 'exito'
 
+export type PedidoRolloEstadoPersistido = {
+  devuelto_at: string | null
+  liberado_at: string | null
+}
+
+export type PedidoRolloEstadoVista = 'activo' | 'devuelto' | 'liberado'
+
 const MAX_CANDIDATOS = 20
 const MAX_LARGO_CODIGO = 128
 
@@ -59,4 +66,16 @@ export function pasoAnteriorDevoluciones(
     default:
       return null
   }
+}
+
+/**
+ * Un pedido_rollo devuelto también queda liberado para que vuelva al stock.
+ * Por eso devuelto_at debe tener prioridad sobre liberado_at al clasificarlo.
+ */
+export function estadoPedidoRollo(
+  pedidoRollo: PedidoRolloEstadoPersistido
+): PedidoRolloEstadoVista {
+  if (pedidoRollo.devuelto_at) return 'devuelto'
+  if (pedidoRollo.liberado_at) return 'liberado'
+  return 'activo'
 }

@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 
 export type RolloEntregadoInfo = {
@@ -194,6 +195,11 @@ export async function devolverRollos(
     devueltos: number
     errores: { rollo_id: string; error: string }[]
   }
+
+  revalidatePath('/devoluciones')
+  revalidatePath('/pedidos')
+  revalidatePath('/stock')
+
   return {
     ok: true,
     devueltos: result.devueltos,

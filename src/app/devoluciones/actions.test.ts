@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
+  revalidatePath: vi.fn(),
 }))
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: mocks.createClient }))
+vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }))
 
 import {
   buscarPartidasConEntregados,
+  devolverRollos,
   getRolloEntregado,
   getRollosEntregadosByIngreso,
 } from './actions'
@@ -149,5 +152,35 @@ describe('Server Actions de devoluciones', () => {
     const result = await buscarPartidasConEntregados('OT-1')
 
     expect(result.ok && result.rows[0].rollos_entregados).toBe(2)
+  })
+
+  it('persiste la devolución y refresca las vistas que muestran su estado', async () => {
+    const supabase = supabaseConRpc(async () => ({
+      data: { devueltos: 1, errores: [] },
+      error: null,
+    }))
+    mocks.createClient.mockResolvedValue(supabase)
+
+    const result = await devolverRollos(
+      [{ rolloId: ROLLO_ROW.rollo_id, segunda: false }],
+      'Devolución del cliente'
+    )
+
+    expect(result).toEqual({ ok: true, devueltos: 1, errores: [] })
+    expect(supabase.rpc).toHaveBeenCalledWith('devolver_rollos_deposito', {
+      p_items: [
+        {
+          rollo_id: ROLLO_ROW.rollo_id,
+          segunda: false,
+          falla_categoria: null,
+        },
+      ],
+      p_motivo: 'Devolución del cliente',
+    })
+    expect(mocks.revalidatePath.mock.calls).toEqual([
+      ['/devoluciones'],
+      ['/pedidos'],
+      ['/stock'],
+    ])
   })
 })

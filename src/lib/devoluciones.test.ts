@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   construirCandidatosDevolucion,
+  estadoPedidoRollo,
   pasoAnteriorDevoluciones,
 } from './devoluciones'
 
@@ -47,5 +48,26 @@ describe('helpers de devoluciones', () => {
     )
     expect(pasoAnteriorDevoluciones('tipo', false)).toBeNull()
     expect(pasoAnteriorDevoluciones('exito', false)).toBeNull()
+  })
+
+  it('conserva la marca de devuelto aunque la asignación también esté liberada', () => {
+    expect(
+      estadoPedidoRollo({
+        devuelto_at: '2026-08-19T15:00:00.000Z',
+        liberado_at: '2026-08-19T15:00:00.000Z',
+      })
+    ).toBe('devuelto')
+  })
+
+  it('diferencia asignaciones activas de liberaciones que no son devoluciones', () => {
+    expect(
+      estadoPedidoRollo({ devuelto_at: null, liberado_at: null })
+    ).toBe('activo')
+    expect(
+      estadoPedidoRollo({
+        devuelto_at: null,
+        liberado_at: '2026-08-19T15:00:00.000Z',
+      })
+    ).toBe('liberado')
   })
 })
