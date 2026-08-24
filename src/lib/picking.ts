@@ -42,6 +42,20 @@ export type UbicacionesSugeridas = {
   reemplazos: ReemplazoSugerido[]
 }
 
+// Un pedido puede tener todos los rollos confirmados y conservar un estado
+// viejo. En ese caso la UI debe ofrecer una accion explicita de recuperacion.
+export function requiereFinalizarPicking(
+  estadoPedido: string,
+  totalSolicitado: number,
+  totalPickeadoConfirmado: number
+): boolean {
+  return (
+    estadoPedido !== 'lista' &&
+    totalSolicitado > 0 &&
+    totalPickeadoConfirmado >= totalSolicitado
+  )
+}
+
 // Ubicaciones donde hay stock en_stock del mismo articulo y color que la
 // partida. Las que coinciden con el ingreso/lote solicitado van en
 // `ubicaciones`; las de otro lote (sustitucion) van aparte en `reemplazos`,
