@@ -261,6 +261,7 @@ export default async function PickingDetailPage({
         <>
           <PickingScanner
             pedidoId={id}
+            pedidoEstado={pedido.estado}
             partidas={partidas}
             items={items}
             alternativas={[]}

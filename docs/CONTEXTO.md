@@ -406,7 +406,9 @@ Todas idempotentes, todas pegadas en Supabase SQL Editor.
 | 066–068 | Correcciones sucesivas de las RPC de búsqueda del módulo de devoluciones: firma de retorno, `DROP + CREATE`, `LEFT JOIN` y recarga del schema de PostgREST. |
 | 069 | **Consistencia integral de devoluciones** (iteración 2026-08-19). Define como devolvible únicamente un rollo `entregado` con `pedido_rollos` activo; usa el mismo criterio para buscar partidas y abrir su detalle. Agrega `buscar_rollo_entregado_por_codigos(text[])`, tolerancia segura a ceros iniciales y devuelve artículo/color/tintorería desde SQL para evitar embeds ambiguos de PostgREST. Las RPC quedan limitadas a operario/admin de la empresa autenticada. |
 
-**Schema canónico**: ✅ `supabase/schema.sql` refleja el modelo base post-039. Para DB nueva: correr `schema.sql` y después las migraciones `040`..`069` en orden.
+| 070 | **Reconciliación del estado de picking** (iteración 2026-08-24). Repara pedidos 100% pickeados que quedaron en `pendiente`/`en_preparacion`, agrega la RPC segura `finalizar_picking_pedido` y sincroniza el estado cuando cambia la composición de `pedido_partidas`. |
+
+**Schema canónico**: ✅ `supabase/schema.sql` refleja el modelo base post-039. Para DB nueva: correr `schema.sql` y después las migraciones `040`..`070` en orden.
 
 ---
 

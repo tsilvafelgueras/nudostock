@@ -399,6 +399,50 @@ export async function aplicarPickingPedido(
   }
 }
 
+export type FinalizarPickingResult =
+  | {
+      ok: true
+      total: number
+      pickeados: number
+      pendientes: number
+      pedidoCompleto: boolean
+    }
+  | { ok: false; error: string }
+
+// Recupera pedidos que ya tienen todos sus rollos confirmados pero cuyo
+// estado persistido quedo en pendiente/en_preparacion.
+export async function finalizarPickingPedido(
+  pedidoId: string
+): Promise<FinalizarPickingResult> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase.rpc('finalizar_picking_pedido', {
+    p_pedido_id: pedidoId,
+  })
+
+  if (error) return { ok: false, error: error.message }
+
+  const json = data as {
+    total: number
+    pickeados: number
+    pendientes: number
+    pedido_completo: boolean
+  }
+
+  revalidatePath(`/picking/${pedidoId}`)
+  revalidatePath('/picking')
+  revalidatePath(`/pedidos/${pedidoId}`)
+  revalidatePath('/pedidos')
+
+  return {
+    ok: true,
+    total: json.total,
+    pickeados: json.pickeados,
+    pendientes: json.pendientes,
+    pedidoCompleto: Boolean(json.pedido_completo),
+  }
+}
+
 // ── Aviso de multi-sesion (heartbeat) ────────────────────────
 
 export type SesionPickingResult =

@@ -8,9 +8,14 @@ import ScannerByReaderType, {
   type ReaderType,
 } from '@/components/ScannerByReaderType'
 import { extraerCodigoCandidato, type PatronCodigo } from '@/lib/scanner'
-import type { PartidaParaMatch, ReemplazoSugerido } from '@/lib/picking'
+import {
+  requiereFinalizarPicking,
+  type PartidaParaMatch,
+  type ReemplazoSugerido,
+} from '@/lib/picking'
 import {
   aplicarPickingPedido,
+  finalizarPickingPedido,
   marcarSesionPicking,
   previsualizarPickeo,
   reemplazarRolloEnPicking,
@@ -86,12 +91,14 @@ type QuitarTarget =
 
 export default function PickingScanner({
   pedidoId,
+  pedidoEstado,
   partidas,
   items,
   patrones,
   readerType,
 }: {
   pedidoId: string
+  pedidoEstado: string
   partidas: PickPartida[]
   items: PickRollo[]
   alternativas: AlternativaRollo[]
@@ -108,6 +115,7 @@ export default function PickingScanner({
   const [pendingCode, setPendingCode] = useState<string | null>(null)
   const [confirmando, setConfirmando] = useState(false)
   const [aceptando, setAceptando] = useState(false)
+  const [finalizando, setFinalizando] = useState(false)
   const [reemplazando, setReemplazando] = useState(false)
   const [reemplazoTarget, setReemplazoTarget] = useState<ReemplazoTarget | null>(null)
   const [numeroReemplazo, setNumeroReemplazo] = useState('')
@@ -184,10 +192,14 @@ export default function PickingScanner({
   const pickeadosConfirmados = itemsLocales.filter((r) => r.pickeado_at != null).length
   const draftValidos = nuevosLocales.filter((d) => !d.error)
   const pickeados = pickeadosConfirmados + draftValidos.length
-  const pendientes = Math.max(0, total - pickeados)
   const progresoPct = total > 0 ? Math.round((pickeados / total) * 100) : 0
   const pendientesConfirmados = Math.max(0, total - pickeadosConfirmados)
   const completo = total > 0 && pendientesConfirmados === 0
+  const requiereFinalizacion = requiereFinalizarPicking(
+    pedidoEstado,
+    total,
+    pickeadosConfirmados
+  )
   const kilosReales =
     itemsLocales.reduce((acc, r) => acc + Number(r.kilos ?? 0), 0) +
     draftValidos.reduce((acc, d) => acc + Number(d.kilos ?? 0), 0)
@@ -532,6 +544,20 @@ export default function PickingScanner({
     }
   }
 
+  async function ejecutarFinalizar() {
+    setFinalizando(true)
+    const res = await finalizarPickingPedido(pedidoId)
+    setFinalizando(false)
+
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+
+    toast.success('Pedido aceptado. Picking completo, queda Listo.')
+    router.refresh()
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {sesionAviso && (
@@ -650,8 +676,20 @@ export default function PickingScanner({
         <div className="space-y-2 rounded-lg border border-success/30 bg-success/10 p-5 text-center">
           <p className="font-semibold text-success">Pedido listo</p>
           <p className="text-sm text-muted-foreground">
-            Ya se pickearon todos los rollos solicitados. Queda esperando egreso.
+            {requiereFinalizacion
+              ? 'Ya se pickearon todos los rollos solicitados. Aceptá el pedido para pasarlo a Listo.'
+              : 'Ya se pickearon todos los rollos solicitados. Queda esperando egreso.'}
           </p>
+          {requiereFinalizacion && (
+            <button
+              type="button"
+              onClick={ejecutarFinalizar}
+              disabled={finalizando}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+            >
+              {finalizando ? 'Aceptando...' : 'Aceptar pedido'}
+            </button>
+          )}
         </div>
       ) : (
         <ScannerByReaderType

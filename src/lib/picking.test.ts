@@ -2,9 +2,28 @@ import { describe, it, expect } from 'vitest'
 import {
   buildUbicacionesSugeridas,
   matchPartidaParaRollo,
+  requiereFinalizarPicking,
   type StockOrientacionRaw,
   type PartidaParaMatch,
 } from './picking'
+
+describe('requiereFinalizarPicking', () => {
+  it('ofrece recuperar un pedido completo que sigue en preparacion', () => {
+    expect(requiereFinalizarPicking('en_preparacion', 3, 3)).toBe(true)
+  })
+
+  it('no ofrece recuperar un pedido que ya esta listo', () => {
+    expect(requiereFinalizarPicking('lista', 3, 3)).toBe(false)
+  })
+
+  it('no ofrece finalizar si todavia faltan rollos', () => {
+    expect(requiereFinalizarPicking('en_preparacion', 3, 2)).toBe(false)
+  })
+
+  it('no considera completo un pedido sin lineas solicitadas', () => {
+    expect(requiereFinalizarPicking('en_preparacion', 0, 0)).toBe(false)
+  })
+})
 
 const partida = {
   articulo_id: 'articulo-1',
