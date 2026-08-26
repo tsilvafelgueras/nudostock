@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
-
-type Role = 'operario' | 'ventas' | 'admin' | 'super'
+import { canAccessNotifications } from '@/lib/auth/permissions'
+import type { Role } from '@/lib/auth/home-path'
 
 function dashboardForRole(role: Role | null | undefined): string {
   if (role === 'super') return '/super'
@@ -167,7 +167,7 @@ export async function updateSession(request: NextRequest) {
     if (isComercial && role !== 'ventas' && role !== 'admin') {
       return NextResponse.redirect(new URL(dest, request.url))
     }
-    if (isNotificaciones && role !== 'ventas' && role !== 'admin') {
+    if (isNotificaciones && !canAccessNotifications(role)) {
       return NextResponse.redirect(new URL(dest, request.url))
     }
   }

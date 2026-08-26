@@ -53,7 +53,7 @@ export default function RolloDetailDialog({
   rollo: StockRollo
   role: StockRole
   onClose: () => void
-  initialMode?: 'view' | 'editar'
+  initialMode?: 'view' | 'editar' | 'mover'
   ubicaciones: UbicacionOption[]
   articulos: { id: string; nombre: string }[]
   articuloColores: Record<string, { id: string; nombre: string }[]>

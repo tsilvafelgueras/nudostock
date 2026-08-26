@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import AppShell from '@/components/AppShell'
+import { canAccessNotifications } from '@/lib/auth/permissions'
 
 export default async function NotificacionesLayout({
   children,
@@ -20,7 +21,7 @@ export default async function NotificacionesLayout({
     .eq('id', user.id)
     .single()
 
-  if (profile?.role !== 'admin' && profile?.role !== 'ventas') {
+  if (!canAccessNotifications(profile?.role)) {
     redirect('/')
   }
 

@@ -69,6 +69,8 @@ export default function StockList({
   articulos,
   articuloColores,
   tiposFalla = [],
+  initialRolloId,
+  initialIntent = 'view',
 }: {
   rollos: StockRollo[]
   role: StockRole
@@ -78,15 +80,22 @@ export default function StockList({
   articulos: { id: string; nombre: string }[]
   articuloColores: Record<string, { id: string; nombre: string }[]>
   tiposFalla?: TipoFallaOption[]
+  initialRolloId?: string
+  initialIntent?: 'view' | 'editar' | 'mover'
 }) {
-  const [selected, setSelected] = useState<StockRollo | null>(null)
-  const [selectedIntent, setSelectedIntent] = useState<'view' | 'editar'>(
-    'view'
+  const [selected, setSelected] = useState<StockRollo | null>(
+    () => rollos.find((rollo) => rollo.id === initialRolloId) ?? null
   )
+  const [selectedIntent, setSelectedIntent] = useState<
+    'view' | 'editar' | 'mover'
+  >(initialIntent)
   const [viewMode, setViewMode] = useState<'detalle' | 'resumen'>('detalle')
   const puedeEditarRollos = role === 'operario' || role === 'admin'
 
-  function abrir(r: StockRollo, intent: 'view' | 'editar' = 'view') {
+  function abrir(
+    r: StockRollo,
+    intent: 'view' | 'editar' | 'mover' = 'view'
+  ) {
     setSelectedIntent(intent)
     setSelected(r)
   }

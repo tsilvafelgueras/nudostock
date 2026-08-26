@@ -36,9 +36,20 @@ export default async function NotificationBanner() {
           <ul className="mt-2 space-y-1">
             {visibles.map((n) => (
               <li key={n.id} className="text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">{n.titulo}</span>
-                {' — '}
-                {n.mensaje}
+                {n.href ? (
+                  <Link href={n.href} className="hover:underline">
+                    <span className="font-medium text-foreground">{n.titulo}</span>
+                    {' — '}
+                    {n.mensaje}
+                    {n.actionLabel ? ` ${n.actionLabel} →` : ''}
+                  </Link>
+                ) : (
+                  <>
+                    <span className="font-medium text-foreground">{n.titulo}</span>
+                    {' — '}
+                    {n.mensaje}
+                  </>
+                )}
               </li>
             ))}
             {sobrante > 0 && (

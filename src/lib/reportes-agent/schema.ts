@@ -206,6 +206,7 @@ notificaciones
 - mensaje text
 - articulo_id uuid -> articulos.id
 - color_id uuid -> colores.id
+- rollo_id uuid -> rollos.id
 - leida_at timestamptz
 - resuelta_at timestamptz
 - created_at timestamptz

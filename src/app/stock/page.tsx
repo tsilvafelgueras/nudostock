@@ -31,6 +31,8 @@ type SearchParams = {
   ubicacion?: string
   estado?: string
   orden?: string
+  rollo?: string
+  accion?: string
 }
 
 export default async function StockPage({
@@ -44,6 +46,7 @@ export default async function StockPage({
   } = await supabase.auth.getUser()
 
   const sp = await searchParams
+  const rolloObjetivoId = esUuid(sp.rollo) ? sp.rollo : undefined
   const estado = sp.estado || 'en_stock'
   const orden = sp.orden || 'reciente'
 
@@ -54,6 +57,10 @@ export default async function StockPage({
     .single()
 
   const role = (profile?.role ?? 'ventas') as StockRole
+  const accionObjetivo =
+    sp.accion === 'ubicacion' && (role === 'operario' || role === 'admin')
+      ? 'mover'
+      : 'view'
 
   const [
     { data: articulos },
@@ -176,16 +183,20 @@ export default async function StockPage({
     .order('created_at', { ascending: false })
     .limit(500)
 
-  if (estado !== 'todos') query = query.eq('estado', estado)
-  if (sp.articulo) query = query.eq('articulo_id', sp.articulo)
-  if (sp.tintoreria) {
-    query = query.eq('ingresos.tintoreria_id', sp.tintoreria)
+  if (rolloObjetivoId) {
+    query = query.eq('id', rolloObjetivoId)
+  } else {
+    if (estado !== 'todos') query = query.eq('estado', estado)
+    if (sp.articulo) query = query.eq('articulo_id', sp.articulo)
+    if (sp.tintoreria) {
+      query = query.eq('ingresos.tintoreria_id', sp.tintoreria)
+    }
+    if (sp.q) query = query.ilike('numero_pieza', `%${sp.q.trim()}%`)
+    if (sp.ubicacion) query = query.eq('ubicacion', sp.ubicacion.trim())
+    if (sp.color) query = query.eq('color_id', sp.color)
+    if (sp.lote) query = query.eq('ingresos.numero_lote', sp.lote)
+    if (sp.ot) query = query.eq('ingresos.ot', sp.ot)
   }
-  if (sp.q) query = query.ilike('numero_pieza', `%${sp.q.trim()}%`)
-  if (sp.ubicacion) query = query.eq('ubicacion', sp.ubicacion.trim())
-  if (sp.color) query = query.eq('color_id', sp.color)
-  if (sp.lote) query = query.eq('ingresos.numero_lote', sp.lote)
-  if (sp.ot) query = query.eq('ingresos.ot', sp.ot)
 
   const { data: rollosRaw, error } = await query
   const rollos = ((rollosRaw ?? []) as unknown as (Omit<
@@ -397,6 +408,7 @@ export default async function StockPage({
             />
           )}
           <StockList
+            key={`${rolloObjetivoId ?? 'listado'}-${accionObjetivo}`}
             rollos={rollos}
             role={role}
             summary={stockSummary}
@@ -405,10 +417,21 @@ export default async function StockPage({
             articulos={articulos ?? []}
             articuloColores={articuloColores}
             tiposFalla={(tiposFallaRaw ?? []) as { id: string; nombre: string }[]}
+            initialRolloId={rolloObjetivoId}
+            initialIntent={accionObjetivo}
           />
         </>
       )}
     </div>
+  )
+}
+
+function esUuid(value: string | undefined): value is string {
+  return Boolean(
+    value &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value
+      )
   )
 }
 

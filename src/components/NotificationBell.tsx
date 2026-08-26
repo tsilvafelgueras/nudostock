@@ -147,6 +147,11 @@ export default function NotificationBell({
                           timeStyle: 'short',
                         })}
                       </p>
+                      {n.href && n.actionLabel && (
+                        <p className="mt-2 text-xs font-semibold text-action">
+                          {n.actionLabel} &rarr;
+                        </p>
+                      )}
                     </>
                   )
                   return (

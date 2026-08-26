@@ -8,17 +8,64 @@ export type Notificacion = {
     | 'ingreso_pendiente'
     | 'pedido_pendiente'
     | 'rollo_liberado'
+    | 'rollo_devuelto'
+    | 'rollo_eliminado'
   titulo: string
   mensaje: string
   articulo_id: string | null
+  color_id: string | null
+  rollo_id: string | null
   leida_at: string | null
   resuelta_at: string | null
   created_at: string
-  /** Si está, la notificación es un link (no vive en la tabla `notificaciones`). */
+  /** Destino contextual calculado al cargar la notificación. */
   href?: string
-  /** false = no se puede marcar como leída (notificación sintética que se
-   * autoresuelve sola cuando deja de aplicar). Default true. */
+  /** Texto visible de la acción que permite atender la notificación. */
+  actionLabel?: string
+  /** false = no se puede descartar: se resuelve al corregir la causa. */
   dismissable?: boolean
+}
+
+const NOTIFICACION_SELECT =
+  'id, tipo, titulo, mensaje, articulo_id, color_id, rollo_id, leida_at, resuelta_at, created_at'
+
+export function agregarAccionNotificacion(
+  notificacion: Notificacion
+): Notificacion {
+  if (
+    notificacion.tipo === 'rollo_liberado' ||
+    notificacion.tipo === 'rollo_devuelto'
+  ) {
+    return {
+      ...notificacion,
+      href: notificacion.rollo_id
+        ? `/stock?rollo=${encodeURIComponent(notificacion.rollo_id)}&accion=ubicacion`
+        : '/stock?ubicacion=Sin+ubicar',
+      actionLabel: 'Asignar ubicación',
+      // Se cierra automáticamente cuando el rollo deja de estar Sin ubicar.
+      dismissable: false,
+    }
+  }
+
+  if (notificacion.tipo === 'stock_minimo' && notificacion.articulo_id) {
+    const params = new URLSearchParams({
+      articulo: notificacion.articulo_id,
+      estado: 'en_stock',
+    })
+    if (notificacion.color_id) params.set('color', notificacion.color_id)
+
+    return {
+      ...notificacion,
+      href: `/stock?${params.toString()}`,
+      actionLabel: 'Revisar stock',
+    }
+  }
+
+  return notificacion
+}
+
+function agregarAcciones(notificaciones: Notificacion[]): Notificacion[] {
+  return notificaciones.map(agregarAccionNotificacion)
 }
 
 /**
@@ -29,15 +76,14 @@ export async function getNotificacionesNoLeidas(): Promise<Notificacion[]> {
   const supabase = await createClient()
   const { data } = await supabase
     .from('notificaciones')
-    .select('id, tipo, titulo, mensaje, articulo_id, leida_at, resuelta_at, created_at')
+    .select(NOTIFICACION_SELECT)
     .is('resuelta_at', null)
     .is('leida_at', null)
-    // 'rollo_liberado' es un aviso dirigido al operario; no ensuciamos la
-    // campanita de admin/ventas (que ya generaron la acción).
-    .neq('tipo', 'rollo_liberado')
+    // Son tareas de depósito; no ensuciamos la campanita de admin/ventas.
+    .not('tipo', 'in', '(rollo_liberado,rollo_devuelto)')
     .order('created_at', { ascending: false })
     .limit(50)
-  return (data ?? []) as Notificacion[]
+  return agregarAcciones((data ?? []) as Notificacion[])
 }
 
 /**
@@ -49,10 +95,11 @@ export async function getNotificacionesActivas(): Promise<Notificacion[]> {
   const supabase = await createClient()
   const { data } = await supabase
     .from('notificaciones')
-    .select('id, tipo, titulo, mensaje, articulo_id, leida_at, resuelta_at, created_at')
+    .select(NOTIFICACION_SELECT)
     .is('resuelta_at', null)
+    .not('tipo', 'in', '(rollo_liberado,rollo_devuelto)')
     .order('created_at', { ascending: false })
-  return (data ?? []) as Notificacion[]
+  return agregarAcciones((data ?? []) as Notificacion[])
 }
 
 /**
@@ -76,14 +123,13 @@ export async function getNotificacionesOperario(): Promise<Notificacion[]> {
         .from('pedidos')
         .select('id', { count: 'exact', head: true })
         .in('estado', ['pendiente', 'en_preparacion']),
-      // Rollos liberados de pedidos por ventas, pendientes de reubicar.
-      // Persistidas en la tabla (RLS deja al operario ver solo este tipo).
+      // Rollos liberados o devueltos, pendientes de reubicar. Persisten en la
+      // tabla y RLS deja que el operario vea esos dos tipos.
       supabase
         .from('notificaciones')
-        .select('id, tipo, titulo, mensaje, articulo_id, leida_at, resuelta_at, created_at')
-        .eq('tipo', 'rollo_liberado')
+        .select(NOTIFICACION_SELECT)
+        .in('tipo', ['rollo_liberado', 'rollo_devuelto'])
         .is('resuelta_at', null)
-        .is('leida_at', null)
         .order('created_at', { ascending: false })
         .limit(50),
     ])
@@ -105,10 +151,13 @@ export async function getNotificacionesOperario(): Promise<Notificacion[]> {
           : 'ingresos pendientes de confirmar la llegada'
       }.`,
       articulo_id: null,
+      color_id: null,
+      rollo_id: null,
       leida_at: null,
       resuelta_at: null,
       created_at: now,
       href: '/confirmar',
+      actionLabel: 'Confirmar ingresos',
       dismissable: false,
     })
   }
@@ -124,34 +173,110 @@ export async function getNotificacionesOperario(): Promise<Notificacion[]> {
           : 'pedidos pendientes de preparar'
       }.`,
       articulo_id: null,
+      color_id: null,
+      rollo_id: null,
       leida_at: null,
       resuelta_at: null,
       created_at: now,
       href: '/picking',
+      actionLabel: 'Preparar pedidos',
       dismissable: false,
     })
   }
 
-  // Rollos liberados por ventas: notificación persistida y descartable (el
-  // operario la marca leída al reubicar). Linkea al stock filtrado por la
-  // ubicación sentinela para encontrarlos rápido.
+  // Avisos persistidos de reubicación. Cada uno abre el rollo concreto y se
+  // resuelve automáticamente cuando cambia la ubicación.
   for (const n of (liberados ?? []) as Notificacion[]) {
-    notifs.unshift({
-      ...n,
-      href: '/stock?ubicacion=Sin+ubicar',
-      dismissable: true,
-    })
+    notifs.unshift(agregarAccionNotificacion(n))
   }
 
   return notifs
 }
 
+export async function getNotificacionSolicitudesColor(): Promise<Notificacion | null> {
+  const supabase = await createClient()
+  const { count } = await supabase
+    .from('solicitudes_color')
+    .select('id', { count: 'exact', head: true })
+    .eq('estado', 'pendiente')
+
+  if (!count) return null
+
+  return {
+    id: 'solicitudes-color-pendientes',
+    tipo: 'solicitud_color',
+    titulo: 'Verificar colores',
+    mensaje: `${count} ${
+      count === 1
+        ? 'color pendiente de verificación'
+        : 'colores pendientes de verificación'
+    }. Revisalos para aprobarlos o rechazarlos.`,
+    articulo_id: null,
+    color_id: null,
+    rollo_id: null,
+    leida_at: null,
+    resuelta_at: null,
+    created_at: new Date().toISOString(),
+    href: '/admin/colores',
+    actionLabel: 'Revisar colores',
+    dismissable: false,
+  }
+}
+
 export async function getNotificacionesHistorial(): Promise<Notificacion[]> {
   const supabase = await createClient()
-  const { data } = await supabase
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: profile } = user
+    ? await supabase.from('profiles').select('role').eq('id', user.id).single()
+    : { data: null }
+
+  let query = supabase
     .from('notificaciones')
-    .select('id, tipo, titulo, mensaje, articulo_id, leida_at, resuelta_at, created_at')
+    .select(NOTIFICACION_SELECT)
     .order('created_at', { ascending: false })
     .limit(200)
-  return (data ?? []) as Notificacion[]
+
+  // Ventas no puede mover rollos. Estos avisos quedan en el centro del
+  // operario y, como respaldo, del administrador.
+  if (profile?.role === 'ventas') {
+    query = query.not('tipo', 'in', '(rollo_liberado,rollo_devuelto)')
+  }
+
+  const { data } = await query
+  return agregarAcciones((data ?? []) as Notificacion[])
+}
+
+export async function getNotificacionesCentro(): Promise<{
+  activas: Notificacion[]
+  resueltas: Notificacion[]
+}> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: profile } = user
+    ? await supabase.from('profiles').select('role').eq('id', user.id).single()
+    : { data: null }
+
+  const todas = await getNotificacionesHistorial()
+  const activasPersistidas = todas.filter((n) => n.resuelta_at == null)
+  const resueltas = todas.filter((n) => n.resuelta_at != null)
+  let activasSinteticas: Notificacion[] = []
+
+  if (profile?.role === 'operario') {
+    activasSinteticas = await getNotificacionesOperario()
+  } else if (profile?.role === 'admin') {
+    const solicitudesColor = await getNotificacionSolicitudesColor()
+    if (solicitudesColor) activasSinteticas = [solicitudesColor]
+  }
+
+  const idsSinteticas = new Set(activasSinteticas.map((n) => n.id))
+  const activas = [
+    ...activasSinteticas,
+    ...activasPersistidas.filter((n) => !idsSinteticas.has(n.id)),
+  ]
+
+  return { activas, resueltas }
 }

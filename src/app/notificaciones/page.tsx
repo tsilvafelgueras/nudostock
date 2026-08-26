@@ -1,16 +1,19 @@
-import { Bell, CheckCircle2 } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowRight, Bell, CheckCircle2 } from 'lucide-react'
 import DashboardBackButton from '@/components/DashboardBackButton'
-import { getNotificacionesHistorial } from '@/lib/notificaciones'
+import {
+  getNotificacionesCentro,
+  type Notificacion,
+} from '@/lib/notificaciones'
 import MarcarTodasButton from './MarcarTodasButton'
 
 export const dynamic = 'force-dynamic'
 
 export default async function NotificacionesPage() {
-  const todas = await getNotificacionesHistorial()
-
-  const activas = todas.filter((n) => n.resuelta_at == null)
-  const resueltas = todas.filter((n) => n.resuelta_at != null)
-  const hayNoLeidasActivas = activas.some((n) => n.leida_at == null)
+  const { activas, resueltas } = await getNotificacionesCentro()
+  const hayNoLeidasActivas = activas.some(
+    (n) => n.dismissable !== false && n.leida_at == null
+  )
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
@@ -61,14 +64,7 @@ function Section({
 }: {
   titulo: string
   descripcion: string
-  items: {
-    id: string
-    titulo: string
-    mensaje: string
-    leida_at: string | null
-    resuelta_at: string | null
-    created_at: string
-  }[]
+  items: Notificacion[]
   icon: typeof Bell
   tone: 'warning' | 'success'
   vacio: string
@@ -132,6 +128,15 @@ function Section({
                     <span className="text-success">· Leída</span>
                   )}
                 </div>
+                {!muted && n.href && n.actionLabel && (
+                  <Link
+                    href={n.href}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-2 text-xs font-semibold text-action-foreground transition-colors hover:bg-action/90"
+                  >
+                    {n.actionLabel}
+                    <ArrowRight className="size-3.5" />
+                  </Link>
+                )}
               </div>
             </li>
           ))}
