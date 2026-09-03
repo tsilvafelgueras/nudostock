@@ -39,14 +39,16 @@ export type IngresoExtraido = {
 }
 
 export type CodigoErrorExtraccion =
-  | 'GEMINI_ERROR' // falla técnica del servicio (timeout, 5xx, etc)
-  | 'AI_QUOTA_EXCEEDED' // cuota/rate-limit de Gemini (429)
+  | 'GEMINI_ERROR' // falla técnica no clasificada de Gemini
+  | 'OPENAI_ERROR' // falla técnica no clasificada de OpenAI
+  | 'AI_ALL_PROVIDERS_FAILED' // fallaron el proveedor principal y el alternativo
+  | 'AI_QUOTA_EXCEEDED' // cuota/rate-limit del proveedor (429)
   | 'AI_OVERLOADED' // capacidad temporal del proveedor (503)
   | 'AI_TIMEOUT' // el proveedor no respondió dentro del límite local
   | 'AI_UNAVAILABLE' // error interno temporal del proveedor (5xx)
   | 'AI_MODEL_UNAVAILABLE' // modelo no disponible para el proyecto/API
   | 'JSON_INVALID' // la IA devolvió texto pero no parseó como JSON
-  | 'NO_API_KEY' // GEMINI_API_KEY no configurada
+  | 'NO_API_KEY' // API key del proveedor no configurada
   | 'FORMATO_INVALIDO' // la imagen no parece una planilla (0 rollos extraídos)
   | 'OTHER'
 
@@ -62,18 +64,93 @@ export type ExtraccionResult =
  * @param mimeType MIME type del archivo
  * @param customPrompt Prompt custom de la tintorería (campo
  *   `tintorerias.extraction_prompt` en DB). Si es null/vacío, se usa el
- *   prompt default genérico definido en `./gemini.ts`.
+ *   prompt default genérico definido en `./prompt.ts`.
  *
- * Importa la implementación de Gemini "lazy" para que tests/builds que no
- * usan la IA no carguen el SDK.
+ * Gemini es el proveedor principal. OpenAI es el respaldo independiente; si
+ * no está configurado o el formato no es compatible (HEIC/HEIF), se conserva
+ * el segundo modelo de Gemini como último recurso.
  */
 export async function extraerPlanilla(
   fileBuffer: Buffer,
   mimeType: string,
   customPrompt: string | null
 ): Promise<ExtraccionResult> {
-  const { extraerConGemini } = await import('./gemini')
-  return extraerConGemini(fileBuffer, mimeType, customPrompt)
+  const {
+    extraerConGemini,
+    modeloGeminiFallback,
+    modeloGeminiPrincipal,
+  } = await import('./gemini')
+
+  const modeloPrincipal = modeloGeminiPrincipal()
+  const resultadoPrincipal = await extraerConGemini(
+    fileBuffer,
+    mimeType,
+    customPrompt,
+    modeloPrincipal
+  )
+  if (resultadoPrincipal.ok) return resultadoPrincipal
+
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    const { archivoCompatibleConOpenAI, extraerConOpenAI } = await import(
+      './openai'
+    )
+    if (archivoCompatibleConOpenAI(mimeType)) {
+      console.warn(
+        `[extraccion] activando fallback OpenAI por ${resultadoPrincipal.codigo}`
+      )
+      const resultadoOpenAI = await extraerConOpenAI(
+        fileBuffer,
+        mimeType,
+        customPrompt
+      )
+      if (resultadoOpenAI.ok) return resultadoOpenAI
+
+      // Si ambos proveedores coincidieron en que el archivo no era una
+      // planilla o la respuesta era inválida, devolvemos el diagnóstico más
+      // concreto. Para dos fallas técnicas, explicitamos que fallaron ambos.
+      if (
+        resultadoOpenAI.codigo === 'FORMATO_INVALIDO' ||
+        resultadoOpenAI.codigo === 'JSON_INVALID'
+      ) {
+        return resultadoOpenAI
+      }
+      return {
+        ok: false,
+        codigo: 'AI_ALL_PROVIDERS_FAILED',
+        error: `No se pudo procesar la planilla con ninguno de los proveedores. Gemini: ${resultadoPrincipal.error} OpenAI: ${resultadoOpenAI.error}`,
+      }
+    }
+  }
+
+  const modeloFallback = modeloGeminiFallback()
+  if (
+    process.env.GEMINI_API_KEY?.trim() &&
+    modeloFallback !== modeloPrincipal
+  ) {
+    console.warn(
+      `[extraccion] OpenAI no disponible para ${mimeType}; probando ${modeloFallback}`
+    )
+    return extraerConGemini(
+      fileBuffer,
+      mimeType,
+      customPrompt,
+      modeloFallback
+    )
+  }
+
+  if (
+    resultadoPrincipal.codigo === 'NO_API_KEY' &&
+    !process.env.OPENAI_API_KEY?.trim()
+  ) {
+    return {
+      ok: false,
+      codigo: 'NO_API_KEY',
+      error:
+        'No hay ningún proveedor de IA configurado. Falta GEMINI_API_KEY u OPENAI_API_KEY.',
+    }
+  }
+
+  return resultadoPrincipal
 }
 
 /**

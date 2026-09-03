@@ -1,88 +1,24 @@
-import { GoogleGenAI, Type, type Schema } from '@google/genai'
-import type {
-  IngresoExtraido,
-  ExtraccionResult,
-} from './extraerPlanilla'
-import { normalizarFechaISO } from '@/lib/fechas'
+import {
+  GoogleGenAI,
+  ThinkingLevel,
+  Type,
+  type Schema,
+} from '@google/genai'
+import type { ExtraccionResult } from './extraerPlanilla'
+import { buildPrompt } from './prompt'
+import { interpretarRespuestaIA } from './resultado'
 
-// 3.6 Flash es estable, multimodal y soporta PDF + Structured Outputs.
-// Dejamos 2.5 Flash como respaldo porque las cuotas/capacidad de Gemini se
-// aplican por modelo y una caída transitoria no debería bloquear el ingreso.
 const MODELO_PRINCIPAL = 'gemini-3.6-flash'
 const MODELO_FALLBACK = 'gemini-2.5-flash'
-const TIMEOUT_MS = 35_000
-const MAX_INTENTOS = 3
+const TIMEOUT_MS = 50_000
 
-// ── Prompt base ────────────────────────────────────────────
-//
-// Es la parte fija del prompt: rol del asistente + formato de salida.
-// Las instrucciones específicas de cada tintorería (campo `extraction_prompt`
-// en la tabla `tintorerias`, editado por el superadmin) se concatenan después
-// en buildPrompt(). Si no hay prompt custom, usamos DEFAULT_INSTRUCTIONS.
-
-const PROMPT_BASE = `
-Sos un asistente experto en procesar planillas de remitos de tintorerías textiles argentinas.
-
-Te paso una imagen o PDF de una planilla. Extraé TODOS los datos en formato JSON estructurado, según el schema dado.
-
-REGLA CRÍTICA — FECHA:
-El campo \`fecha\` SIEMPRE debe devolverse como ISO "YYYY-MM-DD" (año-mes-día con guiones, año de 4 dígitos).
-NUNCA usar barras "/" ni puntos. NUNCA copiar el formato original de la planilla.
-En Argentina la planilla viene en DD/MM/YYYY → SIEMPRE convertir antes de devolver.
-Ejemplos obligatorios:
-  · "03/05/2026" → "2026-05-03"
-  · "3/5/26"     → "2026-05-03"
-  · "03-05-26"   → "2026-05-03"
-
-Devolvé el JSON directamente. No agregues explicaciones ni texto adicional fuera del JSON.
-`.trim()
-
-const DEFAULT_INSTRUCTIONS = `
-La planilla es un remito de una tintorería textil argentina. Extraé los datos en formato JSON.
-
-# HEADER (datos del lote/despacho, uno solo)
-
-- numero_remito: número de la planilla. Aparece como "DESPACHO N°", "REMITO N°", "N° DE REMITO" o similar. Suele estar en una esquina, a veces con código de barras al lado.
-- fecha: OBLIGATORIO formato ISO "YYYY-MM-DD" (año-mes-día, con guiones, 4 dígitos de año). NUNCA devolver con barras "/" ni en otro orden. En Argentina la planilla viene como DD/MM/YYYY (día primero, mes segundo) — SIEMPRE convertir. Año de 2 dígitos = 20YY. Ejemplos: "03/05/26" → "2026-05-03"; "3/5/2026" → "2026-05-03"; "03-05-2026" → "2026-05-03".
-- color: color del lote a nivel header. Si la planilla declara un único color para TODA la planilla (caso típico: aparece en el header como "COLOR" o "PARTIDA EN COLOR"), ponelo acá. Si la planilla NO declara un color global y cada rollo tiene su propio color en una columna, dejá value: null acá y poné el color en cada rollo.
-- ot: número de orden de trabajo de la tintorería ("OT", "O.T.", "ORDEN").
-- rem_tejeduria: remito de tejeduría ("REM. TEJ.", "REM TEJEDURIA"), del proveedor de tela cruda.
-- referencia: código interno (ej "SBI"), suele ser 2-5 letras.
-- total_rollos_declarado: número total de rollos.
-- total_kilos_declarado: kilos despachados (NO ingresados).
-
-# POR CADA ROLLO
-
-- numero_pieza: identificador del rollo. String, conservar ceros a la izquierda.
-- kilos: peso en kg (decimal, punto NO coma).
-- metros: largo en metros (decimal).
-- ratio: rendimiento m/kg (decimal). A veces "Ratio", "Rdto", "Rto".
-- gramaje_planilla: g/m² (peso por m²). Suele aparecer como "Pm2", "Gramaje", "g/m²".
-- articulo: nombre del artículo/tela del rollo (ej "Algodón Pima", "Modal", "Lino"). Algunas planillas traen un único artículo en el header (en ese caso, copialo en todos los rollos). Otras traen una columna "Artículo" o "Tela" por rollo. Si no aparece en ninguna parte, devolvé value: null y confidence: 0.
-- color: color del rollo (ej "BLANCO", "NEGRO", "AZUL FRANCIA"). Solo poné value si la planilla tiene una columna "Color" por rollo Y el color de este rollo difiere del color global del header. Si la planilla declara un único color global en el header (y los rollos no tienen columna propia), dejá value: null acá — el color global del header ya cubre el caso. Si no aparece en ninguna parte, devolvé value: null y confidence: 0.
-
-# CONFIANZA
-
-Cada campo tiene un campo "confidence" (0.0-1.0):
-- 1.0 = clarísimo, sin ambigüedad
-- 0.85-0.95 = legible con riesgo bajo (0/O, 5/S, 1/I confundibles)
-- 0.5-0.85 = legible con dudas (mancha, decimal poco claro)
-- 0.0-0.5 = casi ilegible, adiviné por contexto
-
-Si un campo NO aparece, devolvé value: null y confidence: 0.
-
-Devolvé solo el JSON. No agregues texto adicional.
-`.trim()
-
-function buildPrompt(customPrompt: string | null): string {
-  const instrucciones = customPrompt?.trim() || DEFAULT_INSTRUCTIONS
-  return `${PROMPT_BASE}\n\n${instrucciones}`
+export function modeloGeminiPrincipal(): string {
+  return process.env.GEMINI_MODEL?.trim() || MODELO_PRINCIPAL
 }
 
-// ── Schema (Gemini responseSchema) ──────────────────────────
-//
-// Cada campo de la planilla se envuelve en `{ value, confidence }` para
-// que la IA reporte su confianza por celda.
+export function modeloGeminiFallback(): string {
+  return process.env.GEMINI_FALLBACK_MODEL?.trim() || MODELO_FALLBACK
+}
 
 function fieldString(): Schema {
   return {
@@ -155,8 +91,6 @@ const SCHEMA: Schema = {
   ],
 }
 
-// ── Implementación ──────────────────────────────────────────
-
 type DiagnosticoError = {
   codigo:
     | 'AI_QUOTA_EXCEEDED'
@@ -166,7 +100,6 @@ type DiagnosticoError = {
     | 'AI_MODEL_UNAVAILABLE'
     | 'GEMINI_ERROR'
   mensaje: string
-  reintentable: boolean
 }
 
 function obtenerCodigoHttp(e: unknown): number | null {
@@ -180,12 +113,10 @@ function obtenerCodigoHttp(e: unknown): number | null {
   return match ? Number(match[1]) : null
 }
 
-// No agrupamos todos los errores transitorios bajo "sobrecargado": un 429
-// suele ser cuota/rate-limit, un 503 sí es capacidad, y un timeout puede ser
-// de red o del proveedor. Distinguirlos hace que el diagnóstico sea accionable.
 function diagnosticarError(e: unknown): DiagnosticoError {
   const code = obtenerCodigoHttp(e)
   const msg = ((e as Error)?.message ?? String(e)).toLowerCase()
+  const nombre = ((e as Error)?.name ?? '').toLowerCase()
 
   if (
     code === 429 ||
@@ -196,8 +127,7 @@ function diagnosticarError(e: unknown): DiagnosticoError {
     return {
       codigo: 'AI_QUOTA_EXCEEDED',
       mensaje:
-        'Gemini alcanzó el límite de cuota del proyecto (temporal o diario). Revisá Usage y Rate limits en Google AI Studio; si el uso es normal, activá facturación o aumentá la cuota.',
-      reintentable: true,
+        'Gemini alcanzó el límite de cuota del proyecto (temporal o diario).',
     }
   }
 
@@ -211,12 +141,15 @@ function diagnosticarError(e: unknown): DiagnosticoError {
       codigo: 'AI_MODEL_UNAVAILABLE',
       mensaje:
         'El modelo de Gemini configurado no está disponible para este proyecto o versión de API.',
-      reintentable: true,
     }
   }
 
+  // El SDK de Gemini usa AbortController para su timeout y expone exactamente
+  // "This operation was aborted". Antes no lo reconocíamos como timeout.
   if (
     code === 408 ||
+    nombre === 'aborterror' ||
+    msg.includes('aborted') ||
     msg.includes('timeout') ||
     msg.includes('timed out') ||
     msg.includes('deadline exceeded') ||
@@ -224,9 +157,7 @@ function diagnosticarError(e: unknown): DiagnosticoError {
   ) {
     return {
       codigo: 'AI_TIMEOUT',
-      mensaje:
-        'Gemini tardó demasiado en procesar la planilla. Probá nuevamente; si se repite, usá una foto o PDF más liviano.',
-      reintentable: true,
+      mensaje: 'Gemini tardó demasiado en procesar la planilla.',
     }
   }
 
@@ -239,9 +170,7 @@ function diagnosticarError(e: unknown): DiagnosticoError {
   ) {
     return {
       codigo: 'AI_OVERLOADED',
-      mensaje:
-        'Gemini está temporalmente sobrecargado. La app ya probó con un modelo alternativo; esperá unos segundos y volvé a intentar.',
-      reintentable: true,
+      mensaje: 'Gemini está temporalmente sobrecargado.',
     }
   }
 
@@ -253,30 +182,25 @@ function diagnosticarError(e: unknown): DiagnosticoError {
   ) {
     return {
       codigo: 'AI_UNAVAILABLE',
-      mensaje:
-        'Gemini tuvo un error interno temporal. La app ya reintentó automáticamente; volvé a intentar en unos segundos.',
-      reintentable: true,
+      mensaje: 'Gemini tuvo un error interno temporal.',
     }
   }
 
   return {
     codigo: 'GEMINI_ERROR',
     mensaje: (e as Error)?.message ?? String(e),
-    reintentable: false,
   }
 }
 
-function modelosConfigurados(): string[] {
-  const principal = process.env.GEMINI_MODEL?.trim() || MODELO_PRINCIPAL
-  const fallback =
-    process.env.GEMINI_FALLBACK_MODEL?.trim() || MODELO_FALLBACK
-  return [...new Set([principal, fallback])]
-}
-
+/** Ejecuta una sola llamada. La selección del proveedor alternativo vive en
+ * `extraerPlanilla`, para que un fallo de Gemini pueda derivarse a OpenAI sin
+ * consumir primero todo el tiempo disponible en reintentos del mismo servicio.
+ */
 export async function extraerConGemini(
   fileBuffer: Buffer,
   mimeType: string,
-  customPrompt: string | null
+  customPrompt: string | null,
+  modelo = modeloGeminiPrincipal()
 ): Promise<ExtraccionResult> {
   const apiKey = process.env.GEMINI_API_KEY
   if (!apiKey) {
@@ -287,13 +211,11 @@ export async function extraerConGemini(
     }
   }
 
-  const prompt = buildPrompt(customPrompt)
-  const modelos = modelosConfigurados()
   const ai = new GoogleGenAI({ apiKey })
-  const archivoBase64 = fileBuffer.toString('base64')
+  const t0 = Date.now()
 
-  const llamarGemini = (modelo: string) =>
-    ai.models.generateContent({
+  try {
+    const response = await ai.models.generateContent({
       model: modelo,
       contents: [
         {
@@ -301,114 +223,44 @@ export async function extraerConGemini(
           parts: [
             {
               inlineData: {
-                data: archivoBase64,
+                data: fileBuffer.toString('base64'),
                 mimeType,
               },
             },
-            { text: prompt },
+            { text: buildPrompt(customPrompt) },
           ],
         },
       ],
       config: {
         responseMimeType: 'application/json',
         responseSchema: SCHEMA,
+        // La familia 3.x razona por defecto. LOW alcanza para OCR estructurado
+        // y evita agotar el timeout. No enviamos esta opción a modelos 2.x,
+        // cuya API de thinking usa parámetros diferentes.
+        ...(modelo.startsWith('gemini-3')
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : {}),
         httpOptions: {
           timeout: TIMEOUT_MS,
-          // El SDK reintenta hasta 5 veces por defecto. Como acá controlamos
-          // reintentos y fallback, lo desactivamos para no multiplicar llamadas
-          // (y empeorar un 429) ni exceder el tiempo de la Server Action.
           retryOptions: { attempts: 1 },
         },
       },
     })
 
-  // Alternamos modelos ante fallos transitorios. Las cuotas de Gemini varían
-  // por modelo, por lo que esto también cubre un modelo temporalmente sin cupo.
-  let response
-  let ultimoDiagnostico: DiagnosticoError | null = null
-  let ultimoErrorCrudo = ''
-  let cursorModelo = 0
-  const modelosNoDisponibles = new Set<string>()
-  const t0 = Date.now()
-  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-    const disponibles = modelos.filter(
-      (modelo) => !modelosNoDisponibles.has(modelo)
+    const u = response.usageMetadata
+    console.info(
+      `[extraccion] ${modelo} respondió en ${Date.now() - t0}ms — tokens in:${u?.promptTokenCount ?? '?'} out:${u?.candidatesTokenCount ?? '?'}`
     )
-    if (disponibles.length === 0) break
-    const modelo = disponibles[cursorModelo % disponibles.length]
-    cursorModelo++
-
-    try {
-      response = await llamarGemini(modelo)
-      const u = response.usageMetadata
-      console.info(
-        `[extraccion] ${modelo} respondió en ${Date.now() - t0}ms (intento ${intento}) — tokens in:${u?.promptTokenCount ?? '?'} out:${u?.candidatesTokenCount ?? '?'}`
-      )
-      break
-    } catch (e) {
-      ultimoErrorCrudo = (e as Error).message ?? String(e)
-      ultimoDiagnostico = diagnosticarError(e)
-      const errCode = obtenerCodigoHttp(e)
-      console.error(
-        `[extraccion] fallo ${modelo} (intento ${intento}) code=${errCode ?? '?'} tipo=${ultimoDiagnostico.codigo}: ${ultimoErrorCrudo}`
-      )
-      if (ultimoDiagnostico.codigo === 'AI_MODEL_UNAVAILABLE') {
-        modelosNoDisponibles.add(modelo)
-      }
-      if (!ultimoDiagnostico.reintentable || intento === MAX_INTENTOS) {
-        return {
-          ok: false,
-          error: ultimoDiagnostico.mensaje,
-          codigo: ultimoDiagnostico.codigo,
-        }
-      }
-      // Backoff exponencial con jitter para evitar reintentos sincronizados.
-      const demora = 800 * 2 ** (intento - 1) + Math.floor(Math.random() * 400)
-      await new Promise((r) => setTimeout(r, demora))
-    }
-  }
-
-  if (!response) {
-    return {
-      ok: false,
-      error:
-        ultimoDiagnostico?.mensaje ||
-        ultimoErrorCrudo ||
-        'La IA no respondió',
-      codigo: ultimoDiagnostico?.codigo || 'GEMINI_ERROR',
-    }
-  }
-
-  const text = response.text
-  if (!text) {
-    return {
-      ok: false,
-      error: 'La IA no devolvió contenido',
-      codigo: 'GEMINI_ERROR',
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(text) as IngresoExtraido
-    // Blindaje: aunque el prompt pide ISO, a veces Gemini devuelve DD/MM/YYYY
-    // y el <input type="date"> lo rechaza. Normalizamos siempre.
-    if (parsed.fecha) {
-      parsed.fecha.value = normalizarFechaISO(parsed.fecha.value)
-    }
-    if (!parsed.rollos || parsed.rollos.length === 0) {
-      return {
-        ok: false,
-        error:
-          'La imagen no parece ser una planilla de tintorería válida. La IA no encontró ningún rollo. Verificá que subiste la foto correcta.',
-        codigo: 'FORMATO_INVALIDO',
-      }
-    }
-    return { ok: true, data: parsed }
+    return interpretarRespuestaIA(response.text, 'GEMINI_ERROR')
   } catch (e) {
+    const diagnostico = diagnosticarError(e)
+    console.error(
+      `[extraccion] fallo ${modelo} en ${Date.now() - t0}ms code=${obtenerCodigoHttp(e) ?? '?'} tipo=${diagnostico.codigo}: ${(e as Error)?.message ?? String(e)}`
+    )
     return {
       ok: false,
-      error: `JSON inválido en respuesta de IA: ${(e as Error).message}`,
-      codigo: 'JSON_INVALID',
+      error: diagnostico.mensaje,
+      codigo: diagnostico.codigo,
     }
   }
 }

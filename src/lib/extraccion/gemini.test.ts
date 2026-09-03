@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({
-  generateContent: vi.fn(),
-}))
+const mocks = vi.hoisted(() => ({ generateContent: vi.fn() }))
 
 vi.mock('@google/genai', () => ({
   GoogleGenAI: class {
     models = { generateContent: mocks.generateContent }
   },
+  ThinkingLevel: { LOW: 'LOW' },
   Type: {
     OBJECT: 'OBJECT',
     STRING: 'STRING',
@@ -49,13 +48,12 @@ describe('extraerConGemini', () => {
   })
 
   afterEach(() => {
-    vi.useRealTimers()
     delete process.env.GEMINI_API_KEY
     delete process.env.GEMINI_MODEL
     delete process.env.GEMINI_FALLBACK_MODEL
   })
 
-  it('envia el archivo y el prompt al modelo configurado y normaliza la fecha', async () => {
+  it('envía el archivo y el prompt al modelo configurado y normaliza la fecha', async () => {
     mocks.generateContent.mockResolvedValue({
       text: JSON.stringify(respuestaValida),
       usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50 },
@@ -87,13 +85,14 @@ describe('extraerConGemini', () => {
     )
     expect(request.config.responseMimeType).toBe('application/json')
     expect(request.config.responseSchema).toBeDefined()
+    expect(request.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' })
     expect(request.config.httpOptions).toEqual({
-      timeout: 35_000,
+      timeout: 50_000,
       retryOptions: { attempts: 1 },
     })
   })
 
-  it('usa las instrucciones genericas cuando no hay prompt custom', async () => {
+  it('usa las instrucciones genéricas cuando no hay prompt custom', async () => {
     mocks.generateContent.mockResolvedValue({
       text: JSON.stringify(respuestaValida),
       usageMetadata: {},
@@ -126,11 +125,8 @@ describe('extraerConGemini', () => {
     expect(result).toMatchObject({ ok: false, codigo: 'FORMATO_INVALIDO' })
   })
 
-  it('informa cuando Gemini devuelve JSON invalido', async () => {
-    mocks.generateContent.mockResolvedValue({
-      text: '{json roto',
-      usageMetadata: {},
-    })
+  it('informa cuando Gemini devuelve JSON inválido', async () => {
+    mocks.generateContent.mockResolvedValue({ text: '{json roto', usageMetadata: {} })
 
     const result = await extraerConGemini(Buffer.from('x'), 'image/jpeg', null)
 
@@ -146,69 +142,57 @@ describe('extraerConGemini', () => {
     expect(mocks.generateContent).toHaveBeenCalledTimes(1)
   })
 
-  it('cambia al modelo fallback cuando el principal está sobrecargado', async () => {
-    vi.useFakeTimers()
-    mocks.generateContent
-      .mockRejectedValueOnce(
-        Object.assign(new Error('503 UNAVAILABLE: high demand'), { status: 503 })
-      )
-      .mockResolvedValueOnce({
-        text: JSON.stringify(respuestaValida),
-        usageMetadata: {},
-      })
+  it('clasifica "This operation was aborted" como timeout reintentable', async () => {
+    mocks.generateContent.mockRejectedValue(
+      Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
+    )
 
-    const resultPromise = extraerConGemini(
+    const result = await extraerConGemini(
       Buffer.from('remito'),
       'application/pdf',
       null
     )
-    await vi.runAllTimersAsync()
-    const result = await resultPromise
 
-    expect(result).toMatchObject({ ok: true })
-    expect(mocks.generateContent).toHaveBeenCalledTimes(2)
-    expect(mocks.generateContent.mock.calls.map(([request]) => request.model)).toEqual([
-      'gemini-3.6-flash',
-      'gemini-2.5-flash',
-    ])
+    expect(result).toMatchObject({ ok: false, codigo: 'AI_TIMEOUT' })
+    expect(mocks.generateContent).toHaveBeenCalledTimes(1)
   })
 
   it('distingue cuota agotada de una sobrecarga 503', async () => {
-    vi.useFakeTimers()
     mocks.generateContent.mockRejectedValue(
       Object.assign(new Error('429 RESOURCE_EXHAUSTED: quota exceeded'), {
         status: 429,
       })
     )
 
-    const resultPromise = extraerConGemini(
+    const result = await extraerConGemini(
       Buffer.from('remito'),
       'application/pdf',
       null
     )
-    await vi.runAllTimersAsync()
-    const result = await resultPromise
 
-    expect(result).toMatchObject({
-      ok: false,
-      codigo: 'AI_QUOTA_EXCEEDED',
-    })
+    expect(result).toMatchObject({ ok: false, codigo: 'AI_QUOTA_EXCEEDED' })
     expect(result.ok || result.error).toContain('cuota')
-    expect(mocks.generateContent).toHaveBeenCalledTimes(3)
+    expect(mocks.generateContent).toHaveBeenCalledTimes(1)
   })
 
-  it('permite elegir los modelos por variables de entorno', async () => {
+  it('permite elegir el modelo por variable de entorno o argumento', async () => {
     process.env.GEMINI_MODEL = 'gemini-principal-custom'
-    process.env.GEMINI_FALLBACK_MODEL = 'gemini-fallback-custom'
     mocks.generateContent.mockResolvedValue({
       text: JSON.stringify(respuestaValida),
       usageMetadata: {},
     })
 
     await extraerConGemini(Buffer.from('remito'), 'image/jpeg', null)
+    await extraerConGemini(
+      Buffer.from('remito'),
+      'image/jpeg',
+      null,
+      'gemini-explicito'
+    )
 
     expect(mocks.generateContent.mock.calls[0][0].model).toBe(
       'gemini-principal-custom'
     )
+    expect(mocks.generateContent.mock.calls[1][0].model).toBe('gemini-explicito')
   })
 })

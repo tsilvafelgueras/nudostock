@@ -1749,6 +1749,11 @@ Cuando operario carga manualmente con el toggle "ya están en el depósito", el 
 | `NEXT_PUBLIC_SUPABASE_URL` | Vercel + .env.local | URL pública del proyecto Supabase |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Vercel + .env.local | "Publishable key" (sb_publishable_...) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel (Production+Preview, marcado sensitive) + .env.local | service_role key. **NUNCA con prefijo NEXT_PUBLIC_**, **NUNCA commiteada** |
+| `GEMINI_API_KEY` | Vercel + .env.local | Proveedor principal de extracción de planillas |
+| `OPENAI_API_KEY` | Vercel + .env.local | Respaldo independiente cuando Gemini falla |
+| `GEMINI_MODEL` | Vercel + .env.local (opcional) | Default: `gemini-3.6-flash` |
+| `GEMINI_FALLBACK_MODEL` | Vercel + .env.local (opcional) | Último recurso si OpenAI no está disponible. Default: `gemini-2.5-flash` |
+| `OPENAI_FALLBACK_MODEL` | Vercel + .env.local (opcional) | Default: `gpt-5.6-luna` |
 
 ### GitHub
 - Repo privado.

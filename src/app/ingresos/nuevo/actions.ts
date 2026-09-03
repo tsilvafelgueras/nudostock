@@ -83,6 +83,8 @@ export type ProcesarPlanillaResult =
         | 'ROL_NO_AUTORIZADO'
         | 'STORAGE_ERROR'
         | 'GEMINI_ERROR'
+        | 'OPENAI_ERROR'
+        | 'AI_ALL_PROVIDERS_FAILED'
         | 'AI_QUOTA_EXCEEDED'
         | 'AI_OVERLOADED'
         | 'AI_TIMEOUT'
