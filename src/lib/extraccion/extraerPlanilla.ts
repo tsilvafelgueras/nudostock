@@ -40,7 +40,7 @@ export type IngresoExtraido = {
 
 export type CodigoErrorExtraccion =
   | 'GEMINI_ERROR' // falla técnica no clasificada de Gemini
-  | 'OPENAI_ERROR' // falla técnica no clasificada de OpenAI
+  | 'OPENROUTER_ERROR' // falla técnica no clasificada de OpenRouter
   | 'AI_ALL_PROVIDERS_FAILED' // fallaron el proveedor principal y el alternativo
   | 'AI_QUOTA_EXCEEDED' // cuota/rate-limit del proveedor (429)
   | 'AI_OVERLOADED' // capacidad temporal del proveedor (503)
@@ -66,7 +66,7 @@ export type ExtraccionResult =
  *   `tintorerias.extraction_prompt` en DB). Si es null/vacío, se usa el
  *   prompt default genérico definido en `./prompt.ts`.
  *
- * Gemini es el proveedor principal. OpenAI es el respaldo independiente; si
+ * Gemini es el proveedor principal. OpenRouter es el respaldo independiente; si
  * no está configurado o el formato no es compatible (HEIC/HEIF), se conserva
  * el segundo modelo de Gemini como último recurso.
  */
@@ -90,34 +90,34 @@ export async function extraerPlanilla(
   )
   if (resultadoPrincipal.ok) return resultadoPrincipal
 
-  if (process.env.OPENAI_API_KEY?.trim()) {
-    const { archivoCompatibleConOpenAI, extraerConOpenAI } = await import(
-      './openai'
+  if (process.env.OPENROUTER_API_KEY?.trim()) {
+    const { archivoCompatibleConOpenRouter, extraerConOpenRouter } = await import(
+      './openrouter'
     )
-    if (archivoCompatibleConOpenAI(mimeType)) {
+    if (archivoCompatibleConOpenRouter(mimeType)) {
       console.warn(
-        `[extraccion] activando fallback OpenAI por ${resultadoPrincipal.codigo}`
+        `[extraccion] activando fallback OpenRouter por ${resultadoPrincipal.codigo}`
       )
-      const resultadoOpenAI = await extraerConOpenAI(
+      const resultadoOpenRouter = await extraerConOpenRouter(
         fileBuffer,
         mimeType,
         customPrompt
       )
-      if (resultadoOpenAI.ok) return resultadoOpenAI
+      if (resultadoOpenRouter.ok) return resultadoOpenRouter
 
       // Si ambos proveedores coincidieron en que el archivo no era una
       // planilla o la respuesta era inválida, devolvemos el diagnóstico más
       // concreto. Para dos fallas técnicas, explicitamos que fallaron ambos.
       if (
-        resultadoOpenAI.codigo === 'FORMATO_INVALIDO' ||
-        resultadoOpenAI.codigo === 'JSON_INVALID'
+        resultadoOpenRouter.codigo === 'FORMATO_INVALIDO' ||
+        resultadoOpenRouter.codigo === 'JSON_INVALID'
       ) {
-        return resultadoOpenAI
+        return resultadoOpenRouter
       }
       return {
         ok: false,
         codigo: 'AI_ALL_PROVIDERS_FAILED',
-        error: `No se pudo procesar la planilla con ninguno de los proveedores. Gemini: ${resultadoPrincipal.error} OpenAI: ${resultadoOpenAI.error}`,
+        error: `No se pudo procesar la planilla con ninguno de los proveedores. Gemini: ${resultadoPrincipal.error} OpenRouter: ${resultadoOpenRouter.error}`,
       }
     }
   }
@@ -128,7 +128,7 @@ export async function extraerPlanilla(
     modeloFallback !== modeloPrincipal
   ) {
     console.warn(
-      `[extraccion] OpenAI no disponible para ${mimeType}; probando ${modeloFallback}`
+      `[extraccion] OpenRouter no disponible para ${mimeType}; probando ${modeloFallback}`
     )
     return extraerConGemini(
       fileBuffer,
@@ -140,13 +140,13 @@ export async function extraerPlanilla(
 
   if (
     resultadoPrincipal.codigo === 'NO_API_KEY' &&
-    !process.env.OPENAI_API_KEY?.trim()
+    !process.env.OPENROUTER_API_KEY?.trim()
   ) {
     return {
       ok: false,
       codigo: 'NO_API_KEY',
       error:
-        'No hay ningún proveedor de IA configurado. Falta GEMINI_API_KEY u OPENAI_API_KEY.',
+        'No hay ningún proveedor de IA configurado. Falta GEMINI_API_KEY u OPENROUTER_API_KEY.',
     }
   }
 
