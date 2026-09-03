@@ -5,7 +5,13 @@ import type {
 } from './extraerPlanilla'
 import { normalizarFechaISO } from '@/lib/fechas'
 
-const MODELO = 'gemini-2.5-flash'
+// 3.6 Flash es estable, multimodal y soporta PDF + Structured Outputs.
+// Dejamos 2.5 Flash como respaldo porque las cuotas/capacidad de Gemini se
+// aplican por modelo y una caída transitoria no debería bloquear el ingreso.
+const MODELO_PRINCIPAL = 'gemini-3.6-flash'
+const MODELO_FALLBACK = 'gemini-2.5-flash'
+const TIMEOUT_MS = 35_000
+const MAX_INTENTOS = 3
 
 // ── Prompt base ────────────────────────────────────────────
 //
@@ -151,28 +157,120 @@ const SCHEMA: Schema = {
 
 // ── Implementación ──────────────────────────────────────────
 
-// Detecta errores transitorios de la API de Gemini que vale la pena
-// reintentar: 503 (UNAVAILABLE / "high demand"), 429 (rate-limit /
-// RESOURCE_EXHAUSTED), 500 (INTERNAL) y el timeout local. El SDK
-// `@google/genai` expone a veces `status`/`code` numérico y siempre
-// incluye el código en el mensaje, así que chequeamos ambos.
-function esErrorTransitorio(e: unknown): boolean {
-  const err = e as { status?: number; code?: number; message?: string }
-  const code = err?.status ?? err?.code
-  if (code === 503 || code === 429 || code === 500) return true
-  const msg = (err?.message ?? String(e)).toLowerCase()
-  return (
-    msg.includes('503') ||
-    msg.includes('unavailable') ||
-    msg.includes('overloaded') ||
-    msg.includes('high demand') ||
-    msg.includes('429') ||
+type DiagnosticoError = {
+  codigo:
+    | 'AI_QUOTA_EXCEEDED'
+    | 'AI_OVERLOADED'
+    | 'AI_TIMEOUT'
+    | 'AI_UNAVAILABLE'
+    | 'AI_MODEL_UNAVAILABLE'
+    | 'GEMINI_ERROR'
+  mensaje: string
+  reintentable: boolean
+}
+
+function obtenerCodigoHttp(e: unknown): number | null {
+  const err = e as { status?: unknown; code?: unknown }
+  for (const valor of [err?.status, err?.code]) {
+    if (typeof valor === 'number') return valor
+    const match = String(valor ?? '').match(/\b([45]\d\d)\b/)
+    if (match) return Number(match[1])
+  }
+  const match = ((e as Error)?.message ?? String(e)).match(/\b([45]\d\d)\b/)
+  return match ? Number(match[1]) : null
+}
+
+// No agrupamos todos los errores transitorios bajo "sobrecargado": un 429
+// suele ser cuota/rate-limit, un 503 sí es capacidad, y un timeout puede ser
+// de red o del proveedor. Distinguirlos hace que el diagnóstico sea accionable.
+function diagnosticarError(e: unknown): DiagnosticoError {
+  const code = obtenerCodigoHttp(e)
+  const msg = ((e as Error)?.message ?? String(e)).toLowerCase()
+
+  if (
+    code === 429 ||
     msg.includes('resource_exhausted') ||
     msg.includes('rate limit') ||
-    msg.includes('500') ||
-    msg.includes('internal') ||
+    msg.includes('quota')
+  ) {
+    return {
+      codigo: 'AI_QUOTA_EXCEEDED',
+      mensaje:
+        'Gemini alcanzó el límite de cuota del proyecto (temporal o diario). Revisá Usage y Rate limits en Google AI Studio; si el uso es normal, activá facturación o aumentá la cuota.',
+      reintentable: true,
+    }
+  }
+
+  if (
+    code === 404 ||
+    msg.includes('model not found') ||
+    msg.includes('model is not found') ||
+    (msg.includes('model') && msg.includes('not supported'))
+  ) {
+    return {
+      codigo: 'AI_MODEL_UNAVAILABLE',
+      mensaje:
+        'El modelo de Gemini configurado no está disponible para este proyecto o versión de API.',
+      reintentable: true,
+    }
+  }
+
+  if (
+    code === 408 ||
+    msg.includes('timeout') ||
+    msg.includes('timed out') ||
+    msg.includes('deadline exceeded') ||
     msg.includes('tardó demasiado')
-  )
+  ) {
+    return {
+      codigo: 'AI_TIMEOUT',
+      mensaje:
+        'Gemini tardó demasiado en procesar la planilla. Probá nuevamente; si se repite, usá una foto o PDF más liviano.',
+      reintentable: true,
+    }
+  }
+
+  if (
+    code === 503 ||
+    msg.includes('overloaded') ||
+    msg.includes('high demand') ||
+    msg.includes('service unavailable') ||
+    msg.includes('unavailable')
+  ) {
+    return {
+      codigo: 'AI_OVERLOADED',
+      mensaje:
+        'Gemini está temporalmente sobrecargado. La app ya probó con un modelo alternativo; esperá unos segundos y volvé a intentar.',
+      reintentable: true,
+    }
+  }
+
+  if (
+    code === 500 ||
+    code === 502 ||
+    code === 504 ||
+    msg.includes('internal error')
+  ) {
+    return {
+      codigo: 'AI_UNAVAILABLE',
+      mensaje:
+        'Gemini tuvo un error interno temporal. La app ya reintentó automáticamente; volvé a intentar en unos segundos.',
+      reintentable: true,
+    }
+  }
+
+  return {
+    codigo: 'GEMINI_ERROR',
+    mensaje: (e as Error)?.message ?? String(e),
+    reintentable: false,
+  }
+}
+
+function modelosConfigurados(): string[] {
+  const principal = process.env.GEMINI_MODEL?.trim() || MODELO_PRINCIPAL
+  const fallback =
+    process.env.GEMINI_FALLBACK_MODEL?.trim() || MODELO_FALLBACK
+  return [...new Set([principal, fallback])]
 }
 
 export async function extraerConGemini(
@@ -190,88 +288,95 @@ export async function extraerConGemini(
   }
 
   const prompt = buildPrompt(customPrompt)
-
-  const TIMEOUT_MS = 45_000
-  const MAX_INTENTOS = 3
-
+  const modelos = modelosConfigurados()
   const ai = new GoogleGenAI({ apiKey })
+  const archivoBase64 = fileBuffer.toString('base64')
 
-  const llamarGemini = () => {
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error('La IA tardó demasiado. Intentá de nuevo o cargá manualmente.')),
-        TIMEOUT_MS
-      )
-    )
-    return Promise.race([
-      ai.models.generateContent({
-        model: MODELO,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  data: fileBuffer.toString('base64'),
-                  mimeType,
-                },
+  const llamarGemini = (modelo: string) =>
+    ai.models.generateContent({
+      model: modelo,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                data: archivoBase64,
+                mimeType,
               },
-              { text: prompt },
-            ],
-          },
-        ],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: SCHEMA,
-          // Thinking apagado: para extracción con schema fijo no aporta y
-          // agrega latencia.
-          // thinkingConfig: { thinkingBudget: 0 },
+            },
+            { text: prompt },
+          ],
         },
-      }),
-      timeout,
-    ])
-  }
+      ],
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: SCHEMA,
+        httpOptions: {
+          timeout: TIMEOUT_MS,
+          // El SDK reintenta hasta 5 veces por defecto. Como acá controlamos
+          // reintentos y fallback, lo desactivamos para no multiplicar llamadas
+          // (y empeorar un 429) ni exceder el tiempo de la Server Action.
+          retryOptions: { attempts: 1 },
+        },
+      },
+    })
 
-  // Gemini (sobre todo en free tier) devuelve errores transitorios —503
-  // UNAVAILABLE "high demand", 429 rate-limit, 500 INTERNAL— que se resuelven
-  // reintentando. Hacemos hasta MAX_INTENTOS con backoff exponencial (1s, 2s)
-  // antes de rendirnos. Errores no transitorios (ej. API key inválida) cortan
-  // de una.
+  // Alternamos modelos ante fallos transitorios. Las cuotas de Gemini varían
+  // por modelo, por lo que esto también cubre un modelo temporalmente sin cupo.
   let response
-  let ultimoError = ''
+  let ultimoDiagnostico: DiagnosticoError | null = null
+  let ultimoErrorCrudo = ''
+  let cursorModelo = 0
+  const modelosNoDisponibles = new Set<string>()
   const t0 = Date.now()
   for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    const disponibles = modelos.filter(
+      (modelo) => !modelosNoDisponibles.has(modelo)
+    )
+    if (disponibles.length === 0) break
+    const modelo = disponibles[cursorModelo % disponibles.length]
+    cursorModelo++
+
     try {
-      response = await llamarGemini()
+      response = await llamarGemini(modelo)
       const u = response.usageMetadata
       console.info(
-        `[extraccion] ${MODELO} respondió en ${Date.now() - t0}ms (intento ${intento}) — tokens in:${u?.promptTokenCount ?? '?'} out:${u?.candidatesTokenCount ?? '?'}`
+        `[extraccion] ${modelo} respondió en ${Date.now() - t0}ms (intento ${intento}) — tokens in:${u?.promptTokenCount ?? '?'} out:${u?.candidatesTokenCount ?? '?'}`
       )
       break
     } catch (e) {
-      ultimoError = (e as Error).message ?? String(e)
-      const errCode =
-        (e as { status?: number; code?: number }).status ??
-        (e as { status?: number; code?: number }).code
+      ultimoErrorCrudo = (e as Error).message ?? String(e)
+      ultimoDiagnostico = diagnosticarError(e)
+      const errCode = obtenerCodigoHttp(e)
       console.error(
-        `[extraccion] fallo Gemini (intento ${intento}) code=${errCode ?? '?'}: ${ultimoError}`
+        `[extraccion] fallo ${modelo} (intento ${intento}) code=${errCode ?? '?'} tipo=${ultimoDiagnostico.codigo}: ${ultimoErrorCrudo}`
       )
-      if (!esErrorTransitorio(e) || intento === MAX_INTENTOS) {
+      if (ultimoDiagnostico.codigo === 'AI_MODEL_UNAVAILABLE') {
+        modelosNoDisponibles.add(modelo)
+      }
+      if (!ultimoDiagnostico.reintentable || intento === MAX_INTENTOS) {
         return {
           ok: false,
-          error: esErrorTransitorio(e)
-            ? 'El servicio de IA está sobrecargado en este momento. Esperá unos segundos y volvé a intentar, o cargá la planilla a mano.'
-            : ultimoError,
-          codigo: 'GEMINI_ERROR',
+          error: ultimoDiagnostico.mensaje,
+          codigo: ultimoDiagnostico.codigo,
         }
       }
-      // Backoff: 1s tras el 1er fallo, 2s tras el 2do.
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** (intento - 1)))
+      // Backoff exponencial con jitter para evitar reintentos sincronizados.
+      const demora = 800 * 2 ** (intento - 1) + Math.floor(Math.random() * 400)
+      await new Promise((r) => setTimeout(r, demora))
     }
   }
 
   if (!response) {
-    return { ok: false, error: ultimoError || 'La IA no respondió', codigo: 'GEMINI_ERROR' }
+    return {
+      ok: false,
+      error:
+        ultimoDiagnostico?.mensaje ||
+        ultimoErrorCrudo ||
+        'La IA no respondió',
+      codigo: ultimoDiagnostico?.codigo || 'GEMINI_ERROR',
+    }
   }
 
   const text = response.text

@@ -40,6 +40,11 @@ export type IngresoExtraido = {
 
 export type CodigoErrorExtraccion =
   | 'GEMINI_ERROR' // falla técnica del servicio (timeout, 5xx, etc)
+  | 'AI_QUOTA_EXCEEDED' // cuota/rate-limit de Gemini (429)
+  | 'AI_OVERLOADED' // capacidad temporal del proveedor (503)
+  | 'AI_TIMEOUT' // el proveedor no respondió dentro del límite local
+  | 'AI_UNAVAILABLE' // error interno temporal del proveedor (5xx)
+  | 'AI_MODEL_UNAVAILABLE' // modelo no disponible para el proyecto/API
   | 'JSON_INVALID' // la IA devolvió texto pero no parseó como JSON
   | 'NO_API_KEY' // GEMINI_API_KEY no configurada
   | 'FORMATO_INVALIDO' // la imagen no parece una planilla (0 rollos extraídos)
