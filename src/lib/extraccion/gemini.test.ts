@@ -112,6 +112,32 @@ describe('extraerConGemini', () => {
     expect(prompt).toContain('POR CADA ROLLO')
   })
 
+  it('usa texto OCR sin reenviar el archivo y conserva el schema universal', async () => {
+    mocks.generateContent.mockResolvedValue({
+      text: JSON.stringify(respuestaValida),
+      usageMetadata: {},
+    })
+
+    await extraerConGemini(
+      Buffer.from('archivo-que-no-debe-enviarse'),
+      'image/heic',
+      null,
+      'gemini-explicito',
+      20_000,
+      'REMITO 123\nPIEZA    KILOS\n001      21,5'
+    )
+
+    const request = mocks.generateContent.mock.calls[0][0]
+    expect(request.contents[0].parts).toHaveLength(1)
+    expect(request.contents[0].parts[0]).not.toHaveProperty('inlineData')
+    expect(request.contents[0].parts[0].text).toContain('FUENTE: TEXTO OCR LOCAL')
+    expect(request.contents[0].parts[0].text).toContain('PIEZA')
+    expect(request.contents[0].parts[0].text).toContain(
+      'CONTRATO UNIVERSAL DE EXTRACCIÓN'
+    )
+    expect(request.config.responseSchema).toBeDefined()
+  })
+
   it('corta antes de invocar el SDK cuando falta la API key', async () => {
     delete process.env.GEMINI_API_KEY
 

@@ -206,6 +206,7 @@ export default function NuevoIngresoForm({
 }) {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textoOcrRef = useRef<string | null>(null)
 
   const tintorerias = initialTintorerias
   const [articulos, setArticulos] = useState(initialArticulos)
@@ -218,7 +219,15 @@ export default function NuevoIngresoForm({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [imagenPath, setImagenPath] = useState<string | null>(null)
   const [extrayendo, setExtrayendo] = useState(false)
-  const [etapaIA, setEtapaIA] = useState<'subiendo' | 'procesando' | null>(null)
+  const [etapaIA, setEtapaIA] = useState<
+    'ocr' | 'subiendo' | 'procesando' | null
+  >(null)
+  const [progresoOcr, setProgresoOcr] = useState<{
+    porcentaje: number
+    detalle: string
+  } | null>(null)
+  const [ocrDisponible, setOcrDisponible] = useState(false)
+  const [metodoLectura, setMetodoLectura] = useState<'ocr' | 'visual' | null>(null)
   const [extraccionError, setExtraccionError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [confianzas, setConfianzas] = useState<Confianzas | null>(null)
@@ -456,6 +465,10 @@ export default function NuevoIngresoForm({
     setImagenPath(null)
     setExtrayendo(false)
     setEtapaIA(null)
+    setProgresoOcr(null)
+    setOcrDisponible(false)
+    setMetodoLectura(null)
+    textoOcrRef.current = null
     setExtraccionError(null)
     setWarnings([])
     setConfianzas(null)
@@ -480,6 +493,10 @@ export default function NuevoIngresoForm({
     }
 
     setArchivo(file)
+    textoOcrRef.current = null
+    setMetodoLectura(null)
+    setProgresoOcr(null)
+    setOcrDisponible(false)
     setExtraccionError(null)
     setWarnings([])
     setConfianzas(null)
@@ -495,14 +512,58 @@ export default function NuevoIngresoForm({
     await ejecutarExtraccion(file)
   }
 
-  async function ejecutarExtraccion(file: File, pathExistente?: string) {
+  async function ejecutarExtraccion(
+    file: File,
+    pathExistente?: string,
+    opciones: { forzarVisual?: boolean } = {}
+  ) {
     setExtrayendo(true)
     setExtraccionError(null)
     setWarnings([])
     setConfianzas(null)
+    setMetodoLectura(null)
 
     try {
       let path = pathExistente
+      let textoOcr: string | null = null
+
+      if (!opciones.forzarVisual) {
+        textoOcr = textoOcrRef.current
+        if (!textoOcr) {
+          setEtapaIA('ocr')
+          setProgresoOcr({
+            porcentaje: 0,
+            detalle: 'Preparando la lectura local',
+          })
+          try {
+            const { extraerTextoPlanillaLocal } = await import(
+              '@/lib/extraccion/ocrCliente'
+            )
+            const resultadoOcr = await extraerTextoPlanillaLocal(
+              file,
+              setProgresoOcr
+            )
+            textoOcr = resultadoOcr?.texto ?? null
+            textoOcrRef.current = textoOcr
+            setOcrDisponible(Boolean(textoOcr))
+            if (resultadoOcr) {
+              console.info(
+                `[ocr] lectura local lista metodo=${resultadoOcr.metodo} paginas=${resultadoOcr.paginas} caracteres=${resultadoOcr.texto.length} confianza=${resultadoOcr.confianza ?? '?'}`
+              )
+            } else {
+              console.warn('[ocr] no se obtuvo texto suficiente; usando lectura visual')
+            }
+          } catch (error) {
+            textoOcrRef.current = null
+            textoOcr = null
+            setOcrDisponible(false)
+            console.warn(
+              '[ocr] falló la prelectura local; usando lectura visual',
+              error
+            )
+          }
+        }
+      }
 
       if (!path) {
         setEtapaIA('subiendo')
@@ -535,6 +596,7 @@ export default function NuevoIngresoForm({
         imagen_path: path,
         mime_type: file.type,
         tintoreria_id: tintoreriaId,
+        texto_ocr: textoOcr,
       })
 
       if (!result.ok) {
@@ -545,6 +607,7 @@ export default function NuevoIngresoForm({
 
       setImagenPath(result.imagen_path)
       setWarnings(result.warnings)
+      setMetodoLectura(result.metodo_lectura)
       aplicarDatosIA(result.datos)
     } catch (error) {
       console.error('[extraccion] error inesperado en carga directa', error)
@@ -554,6 +617,7 @@ export default function NuevoIngresoForm({
     } finally {
       setExtrayendo(false)
       setEtapaIA(null)
+      setProgresoOcr(null)
     }
   }
 
@@ -565,6 +629,13 @@ export default function NuevoIngresoForm({
       return
     }
     await ejecutarExtraccion(archivo, imagenPath ?? undefined)
+  }
+
+  async function reintentarExtraccionVisual() {
+    if (!archivo) return
+    await ejecutarExtraccion(archivo, imagenPath ?? undefined, {
+      forzarVisual: true,
+    })
   }
 
   function aplicarDatosIA(datos: IngresoExtraido) {
@@ -1112,14 +1183,18 @@ export default function NuevoIngresoForm({
                   <Spinner />
                   <div>
                     <p className="font-medium">
-                      {etapaIA === 'subiendo'
+                      {etapaIA === 'ocr'
+                        ? 'Leyendo planilla con OCR gratuito...'
+                        : etapaIA === 'subiendo'
                         ? 'Subiendo planilla de forma segura...'
-                        : 'Procesando planilla con IA...'}
+                        : 'Armando la estructura única de datos...'}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {etapaIA === 'subiendo'
+                      {etapaIA === 'ocr'
+                        ? `${progresoOcr?.detalle ?? 'Procesando en este dispositivo'}${progresoOcr?.porcentaje ? ` · ${progresoOcr.porcentaje}%` : ''}`
+                        : etapaIA === 'subiendo'
                         ? 'Podés usar la foto o PDF original, sin achicarlo.'
-                        : 'Esto puede tomar algunos segundos.'}
+                        : 'El mismo formato universal sirve para todas las tintorerías.'}
                     </p>
                   </div>
                 </div>
@@ -1140,7 +1215,18 @@ export default function NuevoIngresoForm({
                         onClick={reintentarExtraccionIA}
                         className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                       >
-                        Reintentar IA
+                        {ocrDisponible
+                          ? 'Reintentar con OCR'
+                          : 'Reintentar extracción'}
+                      </button>
+                    )}
+                    {archivo && ocrDisponible && (
+                      <button
+                        type="button"
+                        onClick={reintentarExtraccionVisual}
+                        className="rounded-md border bg-white px-3 py-1.5 text-xs hover:bg-zinc-50"
+                      >
+                        Probar lectura visual
                       </button>
                     )}
                     <button
@@ -1183,6 +1269,13 @@ export default function NuevoIngresoForm({
                       <p className="text-xs text-muted-foreground">
                         {formatBytes(archivo.size)} · datos extraídos
                       </p>
+                      {metodoLectura && (
+                        <p className="mt-1 text-xs text-success">
+                          {metodoLectura === 'ocr'
+                            ? 'OCR local + estructura universal'
+                            : 'Lectura visual + estructura universal'}
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"

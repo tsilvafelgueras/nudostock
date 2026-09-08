@@ -246,6 +246,24 @@ describe('extraerPlanilla', () => {
     expect(mocks.gemini).toHaveBeenCalledTimes(2)
   })
 
+  it('habilita OpenRouter para HEIC cuando ya existe texto OCR', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    mocks.compatible.mockReturnValue(false)
+    mocks.gemini.mockResolvedValue(timeout)
+    mocks.openrouter.mockResolvedValue(exito)
+
+    const result = await extraerPlanilla(
+      Buffer.from('x'),
+      'image/heic',
+      null,
+      'REMITO 123\nPIEZA    KILOS\n001      10'
+    )
+
+    expect(result).toBe(exito)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(2)
+    expect(mocks.openrouter.mock.calls[0][5]).toContain('PIEZA')
+  })
+
   it('explica los tres intentos cuando todos fallan', async () => {
     process.env.OPENROUTER_API_KEY = 'openrouter-key'
     mocks.gemini.mockResolvedValue(timeout)

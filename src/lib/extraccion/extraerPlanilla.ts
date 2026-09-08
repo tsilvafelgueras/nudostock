@@ -155,6 +155,9 @@ function cantidadValoresExtraidos(resultado: ResultadoExitoso): number {
  * @param mimeType MIME type del archivo
  * @param customPrompt Pistas de layout y alias de la tintorería (campo
  *   `tintorerias.extraction_prompt` en DB), agregadas al contrato universal.
+ * @param textoOcr Transcripción local opcional. Cuando existe, los proveedores
+ *   reciben texto en lugar del archivo visual y mantienen exactamente el mismo
+ *   contrato universal de salida.
  *
  * Gemini es el proveedor principal. Si falla o devuelve menos rollos que los
  * declarados, OpenRouter y el segundo Gemini se ejecutan en paralelo. Los
@@ -163,7 +166,8 @@ function cantidadValoresExtraidos(resultado: ResultadoExitoso): number {
 export async function extraerPlanilla(
   fileBuffer: Buffer,
   mimeType: string,
-  customPrompt: string | null
+  customPrompt: string | null,
+  textoOcr: string | null = null
 ): Promise<ExtraccionResult> {
   const {
     extraerConGemini,
@@ -230,7 +234,8 @@ export async function extraerPlanilla(
         mimeType,
         customPrompt,
         modeloPrincipal,
-        timeoutPrincipal
+        timeoutPrincipal,
+        textoOcr
       )
   )
   if (resultadoPrincipal.ok) {
@@ -267,7 +272,7 @@ export async function extraerPlanilla(
       extraerConOpenRouter,
       modelosOpenRouterFallback,
     } = await import('./openrouter')
-    if (archivoCompatibleConOpenRouter(mimeType)) {
+    if (textoOcr || archivoCompatibleConOpenRouter(mimeType)) {
       for (const modelo of modelosOpenRouterFallback()) {
         intentosFallback.push({
           proveedor: 'OpenRouter',
@@ -279,7 +284,8 @@ export async function extraerPlanilla(
               mimeType,
               customPrompt,
               timeoutFallback,
-              modelo
+              modelo,
+              textoOcr
             ),
         })
       }
@@ -304,7 +310,8 @@ export async function extraerPlanilla(
           mimeType,
           customPrompt,
           modeloFallback,
-          timeoutFallback
+          timeoutFallback,
+          textoOcr
         ),
     })
   }

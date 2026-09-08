@@ -193,7 +193,8 @@ export async function extraerConOpenRouter(
   mimeType: string,
   customPrompt: string | null,
   timeoutMs = TIMEOUT_MS,
-  modelo = modeloOpenRouterFallback()
+  modelo = modeloOpenRouterFallback(),
+  textoOcr: string | null = null
 ): Promise<ExtraccionResult> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
@@ -203,7 +204,7 @@ export async function extraerConOpenRouter(
       codigo: 'NO_API_KEY',
     }
   }
-  if (!archivoCompatibleConOpenRouter(mimeType)) {
+  if (!textoOcr && !archivoCompatibleConOpenRouter(mimeType)) {
     return {
       ok: false,
       error: `OpenRouter no admite ${mimeType} como entrada visual.`,
@@ -223,15 +224,19 @@ export async function extraerConOpenRouter(
         image_url: { url: dataUrl },
       }
 
+  const content = textoOcr
+    ? [{ type: 'text', text: buildPrompt(customPrompt, textoOcr) }]
+    : [
+        { type: 'text', text: buildPrompt(customPrompt) },
+        archivo,
+      ]
+
   const body = {
     model: modelo,
     messages: [
       {
         role: 'user',
-        content: [
-          { type: 'text', text: buildPrompt(customPrompt) },
-          archivo,
-        ],
+        content,
       },
     ],
     response_format: {
@@ -246,7 +251,7 @@ export async function extraerConOpenRouter(
     temperature: 0,
     provider: { require_parameters: true },
     plugins: [
-      ...(esPdf
+      ...(!textoOcr && esPdf
         ? [
             {
               id: 'file-parser',
@@ -283,7 +288,7 @@ export async function extraerConOpenRouter(
     }
 
     console.info(
-      `[extraccion] fallback ${response.model || modelo} respondió en ${Date.now() - t0}ms — tokens in:${response.usage?.prompt_tokens ?? '?'} out:${response.usage?.completion_tokens ?? '?'}`
+      `[extraccion] fallback ${response.model || modelo} respondió en ${Date.now() - t0}ms — fuente:${textoOcr ? 'ocr' : 'visual'} tokens in:${response.usage?.prompt_tokens ?? '?'} out:${response.usage?.completion_tokens ?? '?'}`
     )
     const resultado = interpretarRespuestaIA(
       contenidoRespuesta(response),

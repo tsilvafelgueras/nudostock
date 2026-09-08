@@ -17,6 +17,7 @@ import {
   type MimePlanilla,
 } from '@/lib/storage/planillaArchivo'
 import { validarUbicacionActiva } from '@/lib/ubicacionesServer'
+import { normalizarTextoOcr, textoOcrEsUtil } from '@/lib/extraccion/ocr'
 
 // ── Tipos del flow manual + IA ─────────────────────────────
 
@@ -67,6 +68,7 @@ export type ProcesarPlanillaResult =
       imagen_path: string
       datos: IngresoExtraido
       warnings: string[]
+      metodo_lectura: 'ocr' | 'visual'
     }
   | {
       ok: false
@@ -117,6 +119,7 @@ export type ProcesarPlanillaInput = {
   imagen_path: string
   mime_type: string
   tintoreria_id: string
+  texto_ocr?: string | null
 }
 
 const MIME_FOTOS = [
@@ -186,9 +189,9 @@ export async function prepararSubidaPlanilla(input: {
 
 /**
  * Procesa una planilla con IA aplicando el contrato universal y las pistas de
- * layout/alias de la tintorería elegida. El archivo ya está en Storage: la
- * acción recibe solo el path para no quedar limitada por el body máximo de
- * Server Actions/Vercel.
+ * layout/alias de la tintorería elegida. El archivo ya está en Storage. Si el
+ * navegador logró una prelectura OCR, también recibe ese texto acotado; si no,
+ * conserva la lectura visual anterior.
  */
 export async function procesarPlanillaConIA(
   input: ProcesarPlanillaInput
@@ -196,6 +199,13 @@ export async function procesarPlanillaConIA(
   const imagenPath = input?.imagen_path?.trim()
   const mimeType = input?.mime_type?.trim()
   const tintoreriaId = input?.tintoreria_id?.trim()
+  const textoOcrNormalizado =
+    typeof input?.texto_ocr === 'string'
+      ? normalizarTextoOcr(input.texto_ocr)
+      : ''
+  const textoOcr = textoOcrEsUtil(textoOcrNormalizado)
+    ? textoOcrNormalizado
+    : null
 
   if (!imagenPath) {
     return { ok: false, error: 'No se recibió el archivo subido.', codigo: 'NO_PATH' }
@@ -348,7 +358,12 @@ Si la planilla muestra un color completo o una abreviatura inequívoca, devolvé
   }
 
   const buffer = Buffer.from(await archivo.arrayBuffer())
-  const extraccion = await extraerPlanilla(buffer, mimePlanilla, customPrompt)
+  const extraccion = await extraerPlanilla(
+    buffer,
+    mimePlanilla,
+    customPrompt,
+    textoOcr
+  )
   if (!extraccion.ok) {
     return {
       ok: false,
@@ -365,6 +380,7 @@ Si la planilla muestra un color completo o una abreviatura inequívoca, devolvé
     imagen_path: imagenPath,
     datos: extraccion.data,
     warnings,
+    metodo_lectura: textoOcr ? 'ocr' : 'visual',
   }
 }
 

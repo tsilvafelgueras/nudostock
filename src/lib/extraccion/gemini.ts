@@ -201,7 +201,8 @@ export async function extraerConGemini(
   mimeType: string,
   customPrompt: string | null,
   modelo = modeloGeminiPrincipal(),
-  timeoutMs = TIMEOUT_MS
+  timeoutMs = TIMEOUT_MS,
+  textoOcr: string | null = null
 ): Promise<ExtraccionResult> {
   const apiKey = process.env.GEMINI_API_KEY
   if (!apiKey) {
@@ -214,6 +215,18 @@ export async function extraerConGemini(
 
   const ai = new GoogleGenAI({ apiKey })
   const t0 = Date.now()
+  const prompt = buildPrompt(customPrompt, textoOcr)
+  const parts = textoOcr
+    ? [{ text: prompt }]
+    : [
+        {
+          inlineData: {
+            data: fileBuffer.toString('base64'),
+            mimeType,
+          },
+        },
+        { text: prompt },
+      ]
 
   try {
     const response = await ai.models.generateContent({
@@ -221,15 +234,7 @@ export async function extraerConGemini(
       contents: [
         {
           role: 'user',
-          parts: [
-            {
-              inlineData: {
-                data: fileBuffer.toString('base64'),
-                mimeType,
-              },
-            },
-            { text: buildPrompt(customPrompt) },
-          ],
+          parts,
         },
       ],
       config: {
@@ -253,7 +258,7 @@ export async function extraerConGemini(
 
     const u = response.usageMetadata
     console.info(
-      `[extraccion] ${modelo} respondió en ${Date.now() - t0}ms — tokens in:${u?.promptTokenCount ?? '?'} out:${u?.candidatesTokenCount ?? '?'}`
+      `[extraccion] ${modelo} respondió en ${Date.now() - t0}ms — fuente:${textoOcr ? 'ocr' : 'visual'} tokens in:${u?.promptTokenCount ?? '?'} out:${u?.candidatesTokenCount ?? '?'}`
     )
     return interpretarRespuestaIA(response.text, 'GEMINI_ERROR')
   } catch (e) {

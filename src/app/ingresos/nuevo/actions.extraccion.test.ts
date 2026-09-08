@@ -192,11 +192,30 @@ describe('Server Actions de extracción directa', () => {
     expect(mocks.extraerPlanilla).toHaveBeenCalledWith(
       expect.any(Buffer),
       'image/jpeg',
-      expect.stringContaining('PROMPT INTERNO GALFIONE')
+      expect.stringContaining('PROMPT INTERNO GALFIONE'),
+      null
     )
     const prompt = mocks.extraerPlanilla.mock.calls[0][2]
     expect(prompt).toContain('CATÁLOGO CANÓNICO DE COLORES')
     expect(prompt).toContain('["Blanco","Azul Marino"]')
+  })
+
+  it('normaliza y reenvía el OCR local al contrato universal', async () => {
+    const fake = crearSupabaseFake()
+    mocks.createClient.mockResolvedValue(fake.supabase)
+
+    const result = await procesarPlanillaConIA({
+      imagen_path: PATH_VALIDO,
+      mime_type: 'image/jpeg',
+      tintoreria_id: TINTORERIA_ID,
+      texto_ocr:
+        'REMITO 123 FECHA 08/09/2026  \r\nPIEZA    KILOS    COLOR\r\n001      20,5     NEGRO',
+    })
+
+    expect(result).toMatchObject({ ok: true, metodo_lectura: 'ocr' })
+    expect(mocks.extraerPlanilla.mock.calls[0][3]).toBe(
+      'REMITO 123 FECHA 08/09/2026\nPIEZA    KILOS    COLOR\n001      20,5     NEGRO'
+    )
   })
 
   it('rechaza un path perteneciente a otra empresa antes de descargarlo', async () => {

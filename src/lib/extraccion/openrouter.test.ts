@@ -107,6 +107,24 @@ describe('extraerConOpenRouter', () => {
     ])
   })
 
+  it('usa el OCR como texto incluso si el formato visual no es compatible', async () => {
+    const result = await extraerConOpenRouter(
+      Buffer.from('heic-omitido'),
+      'image/heic',
+      null,
+      20_000,
+      'dots-studio/dots-3-note-preview:free',
+      'REMITO 123\nPIEZA    KILOS\n001      21,5'
+    )
+
+    expect(result.ok).toBe(true)
+    const body = JSON.parse(mocks.fetch.mock.calls[0][1].body)
+    expect(body.messages[0].content).toHaveLength(1)
+    expect(body.messages[0].content[0].text).toContain('FUENTE: TEXTO OCR LOCAL')
+    expect(body.messages[0].content[0].text).not.toContain('base64')
+    expect(body.plugins).toEqual([{ id: 'response-healing' }])
+  })
+
   it('no invoca la API sin OPENROUTER_API_KEY', async () => {
     delete process.env.OPENROUTER_API_KEY
 
