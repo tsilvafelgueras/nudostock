@@ -27,6 +27,7 @@ import type { CodeScannerResult } from '@/components/CodeScanner'
 import { extraerCodigoCandidato } from '@/lib/scanner'
 import type { PatronCodigo } from '@/lib/scanner'
 import { resolverColorCatalogo } from '@/lib/coloresMatching'
+import { resolverArticuloCatalogo } from '@/lib/articulosMatching'
 import {
   formatBytes,
   MAX_PLANILLA_BYTES,
@@ -226,8 +227,6 @@ export default function NuevoIngresoForm({
     porcentaje: number
     detalle: string
   } | null>(null)
-  const [ocrDisponible, setOcrDisponible] = useState(false)
-  const [metodoLectura, setMetodoLectura] = useState<'ocr' | 'visual' | null>(null)
   const [extraccionError, setExtraccionError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [confianzas, setConfianzas] = useState<Confianzas | null>(null)
@@ -466,8 +465,6 @@ export default function NuevoIngresoForm({
     setExtrayendo(false)
     setEtapaIA(null)
     setProgresoOcr(null)
-    setOcrDisponible(false)
-    setMetodoLectura(null)
     textoOcrRef.current = null
     setExtraccionError(null)
     setWarnings([])
@@ -494,9 +491,7 @@ export default function NuevoIngresoForm({
 
     setArchivo(file)
     textoOcrRef.current = null
-    setMetodoLectura(null)
     setProgresoOcr(null)
-    setOcrDisponible(false)
     setExtraccionError(null)
     setWarnings([])
     setConfianzas(null)
@@ -514,54 +509,48 @@ export default function NuevoIngresoForm({
 
   async function ejecutarExtraccion(
     file: File,
-    pathExistente?: string,
-    opciones: { forzarVisual?: boolean } = {}
+    pathExistente?: string
   ) {
     setExtrayendo(true)
     setExtraccionError(null)
     setWarnings([])
     setConfianzas(null)
-    setMetodoLectura(null)
 
     try {
       let path = pathExistente
       let textoOcr: string | null = null
 
-      if (!opciones.forzarVisual) {
-        textoOcr = textoOcrRef.current
-        if (!textoOcr) {
-          setEtapaIA('ocr')
-          setProgresoOcr({
-            porcentaje: 0,
-            detalle: 'Preparando la lectura local',
-          })
-          try {
-            const { extraerTextoPlanillaLocal } = await import(
-              '@/lib/extraccion/ocrCliente'
+      textoOcr = textoOcrRef.current
+      if (!textoOcr) {
+        setEtapaIA('ocr')
+        setProgresoOcr({
+          porcentaje: 0,
+          detalle: 'Preparando la lectura local',
+        })
+        try {
+          const { extraerTextoPlanillaLocal } = await import(
+            '@/lib/extraccion/ocrCliente'
+          )
+          const resultadoOcr = await extraerTextoPlanillaLocal(
+            file,
+            setProgresoOcr
+          )
+          textoOcr = resultadoOcr?.texto ?? null
+          textoOcrRef.current = textoOcr
+          if (resultadoOcr) {
+            console.info(
+              `[ocr] lectura local lista metodo=${resultadoOcr.metodo} paginas=${resultadoOcr.paginas} caracteres=${resultadoOcr.texto.length} confianza=${resultadoOcr.confianza ?? '?'}`
             )
-            const resultadoOcr = await extraerTextoPlanillaLocal(
-              file,
-              setProgresoOcr
-            )
-            textoOcr = resultadoOcr?.texto ?? null
-            textoOcrRef.current = textoOcr
-            setOcrDisponible(Boolean(textoOcr))
-            if (resultadoOcr) {
-              console.info(
-                `[ocr] lectura local lista metodo=${resultadoOcr.metodo} paginas=${resultadoOcr.paginas} caracteres=${resultadoOcr.texto.length} confianza=${resultadoOcr.confianza ?? '?'}`
-              )
-            } else {
-              console.warn('[ocr] no se obtuvo texto suficiente; usando lectura visual')
-            }
-          } catch (error) {
-            textoOcrRef.current = null
-            textoOcr = null
-            setOcrDisponible(false)
-            console.warn(
-              '[ocr] falló la prelectura local; usando lectura visual',
-              error
-            )
+          } else {
+            console.warn('[ocr] no se obtuvo texto suficiente; usando lectura visual')
           }
+        } catch (error) {
+          textoOcrRef.current = null
+          textoOcr = null
+          console.warn(
+            '[ocr] falló la prelectura local; usando lectura visual',
+            error
+          )
         }
       }
 
@@ -592,12 +581,34 @@ export default function NuevoIngresoForm({
       }
 
       setEtapaIA('procesando')
-      const result = await procesarPlanillaConIA({
+      let result = await procesarPlanillaConIA({
         imagen_path: path,
         mime_type: file.type,
         tintoreria_id: tintoreriaId,
         texto_ocr: textoOcr,
       })
+
+      // Si la prelectura no alcanza o la estructura resultante no es
+      // guardable, hacemos automáticamente una segunda lectura sobre el
+      // archivo original. Entre ambos resultados conservamos el más completo.
+      if (textoOcr && (!result.ok || result.requiere_revision)) {
+        const resultadoInicial = result
+        const resultadoArchivo = await procesarPlanillaConIA({
+          imagen_path: path,
+          mime_type: file.type,
+          tintoreria_id: tintoreriaId,
+          texto_ocr: null,
+        })
+
+        if (!resultadoInicial.ok) {
+          result = resultadoArchivo
+        } else if (
+          resultadoArchivo.ok &&
+          resultadoArchivo.puntaje_calidad > resultadoInicial.puntaje_calidad
+        ) {
+          result = resultadoArchivo
+        }
+      }
 
       if (!result.ok) {
         setExtraccionError(result.error)
@@ -607,7 +618,6 @@ export default function NuevoIngresoForm({
 
       setImagenPath(result.imagen_path)
       setWarnings(result.warnings)
-      setMetodoLectura(result.metodo_lectura)
       aplicarDatosIA(result.datos)
     } catch (error) {
       console.error('[extraccion] error inesperado en carga directa', error)
@@ -629,13 +639,6 @@ export default function NuevoIngresoForm({
       return
     }
     await ejecutarExtraccion(archivo, imagenPath ?? undefined)
-  }
-
-  async function reintentarExtraccionVisual() {
-    if (!archivo) return
-    await ejecutarExtraccion(archivo, imagenPath ?? undefined, {
-      forzarVisual: true,
-    })
   }
 
   function aplicarDatosIA(datos: IngresoExtraido) {
@@ -668,38 +671,7 @@ export default function NuevoIngresoForm({
     // Acá filtramos: si el color global no está en los colores del articulo
     // encontrado, dejamos color_id en null para que el usuario lo elija.
     function articuloIdFromText(nombreRaw: string): string | null {
-      const texto = normNombre(nombreRaw)
-      if (!texto) return null
-      const tokensTexto = tokens(texto)
-      const cat = articulos
-        .map((a) => ({ a, n: normNombre(a.nombre), toks: tokens(normNombre(a.nombre)) }))
-        .filter(({ n }) => n)
-
-      // 1. Match exacto.
-      const exacto = cat.find(({ n }) => n === texto)
-      if (exacto) return exacto.a.id
-
-      // 2. Match por tokens: contamos cuántos tokens del catálogo aparecen en
-      //    el texto extraído (exacto o por prefijo, ej. "ml70" ↔ "ml70c").
-      //    Es candidato si coincide la MAYORÍA de sus tokens (≥ 60%), así
-      //    tolera palabras extra en cualquiera de los dos lados:
-      //    catálogo "ML70 Frisada" ↔ texto "...TELA ML70C FRISADA TERMINADA".
-      //    Elegimos el de más coincidencias (más específico).
-      const candidatos = cat
-        .map(({ a, n, toks }) => {
-          const coinc = toks.filter((ct) =>
-            tokensTexto.some((tt) => tokenMatch(ct, tt))
-          ).length
-          return { a, n, total: toks.length, coinc, ratio: coinc / toks.length }
-        })
-        .filter((c) => c.total > 0 && c.coinc >= 1 && c.ratio >= 0.6)
-        .sort(
-          (x, y) =>
-            y.coinc - x.coinc || y.ratio - x.ratio || y.n.length - x.n.length
-        )
-      if (candidatos.length) return candidatos[0].a.id
-
-      return null
+      return resolverArticuloCatalogo(nombreRaw, articulos)
     }
 
     // Nombre del artículo a nivel header: algunas planillas lo traen en la
@@ -1184,7 +1156,7 @@ export default function NuevoIngresoForm({
                   <div>
                     <p className="font-medium">
                       {etapaIA === 'ocr'
-                        ? 'Leyendo planilla con OCR gratuito...'
+                        ? 'Preparando la planilla...'
                         : etapaIA === 'subiendo'
                         ? 'Subiendo planilla de forma segura...'
                         : 'Armando la estructura única de datos...'}
@@ -1215,18 +1187,7 @@ export default function NuevoIngresoForm({
                         onClick={reintentarExtraccionIA}
                         className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                       >
-                        {ocrDisponible
-                          ? 'Reintentar con OCR'
-                          : 'Reintentar extracción'}
-                      </button>
-                    )}
-                    {archivo && ocrDisponible && (
-                      <button
-                        type="button"
-                        onClick={reintentarExtraccionVisual}
-                        className="rounded-md border bg-white px-3 py-1.5 text-xs hover:bg-zinc-50"
-                      >
-                        Probar lectura visual
+                        Reintentar análisis
                       </button>
                     )}
                     <button
@@ -1269,13 +1230,6 @@ export default function NuevoIngresoForm({
                       <p className="text-xs text-muted-foreground">
                         {formatBytes(archivo.size)} · datos extraídos
                       </p>
-                      {metodoLectura && (
-                        <p className="mt-1 text-xs text-success">
-                          {metodoLectura === 'ocr'
-                            ? 'OCR local + estructura universal'
-                            : 'Lectura visual + estructura universal'}
-                        </p>
-                      )}
                     </div>
                     <button
                       type="button"

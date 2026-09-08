@@ -18,6 +18,8 @@ import {
 } from '@/lib/storage/planillaArchivo'
 import { validarUbicacionActiva } from '@/lib/ubicacionesServer'
 import { normalizarTextoOcr, textoOcrEsUtil } from '@/lib/extraccion/ocr'
+import { resolverColorCatalogo } from '@/lib/coloresMatching'
+import { resolverArticuloCatalogo } from '@/lib/articulosMatching'
 
 // ── Tipos del flow manual + IA ─────────────────────────────
 
@@ -69,6 +71,8 @@ export type ProcesarPlanillaResult =
       datos: IngresoExtraido
       warnings: string[]
       metodo_lectura: 'ocr' | 'visual'
+      requiere_revision: boolean
+      puntaje_calidad: number
     }
   | {
       ok: false
@@ -292,6 +296,7 @@ export async function procesarPlanillaConIA(
   const [
     { data: tintoreria, error: tintoreriaError },
     { data: coloresCatalogo, error: coloresError },
+    { data: articulosCatalogo, error: articulosError },
   ] = await Promise.all([
     supabase
       .from('tintorerias')
@@ -300,6 +305,11 @@ export async function procesarPlanillaConIA(
       .single(),
     supabase
       .from('colores')
+      .select('nombre')
+      .eq('activo', true)
+      .order('nombre'),
+    supabase
+      .from('articulos')
       .select('nombre')
       .eq('activo', true)
       .order('nombre'),
@@ -319,6 +329,11 @@ export async function procesarPlanillaConIA(
       `[extraccion] no se pudo cargar el catálogo de colores: ${coloresError.message}`
     )
   }
+  if (articulosError) {
+    console.warn(
+      `[extraccion] no se pudo cargar el catálogo de artículos: ${articulosError.message}`
+    )
+  }
   const nombresColores = (coloresCatalogo ?? [])
     .map(({ nombre }) => nombre.trim())
     .filter(Boolean)
@@ -328,9 +343,19 @@ export async function procesarPlanillaConIA(
 Los colores válidos son: ${JSON.stringify(nombresColores)}.
 Si la planilla muestra un color completo o una abreviatura inequívoca, devolvé exactamente el nombre canónico correspondiente de esta lista. Si es un color único para todo el despacho, colocalo en el campo color del header. No dejes color en null cuando la etiqueta COLOR sea legible.`
     : null
+  const nombresArticulos = (articulosCatalogo ?? [])
+    .map(({ nombre }) => nombre.trim())
+    .filter(Boolean)
+    .slice(0, 250)
+  const pistasArticulos = nombresArticulos.length
+    ? `# CATÁLOGO CANÓNICO DE ARTÍCULOS DE LA APP
+Los artículos válidos son: ${JSON.stringify(nombresArticulos)}.
+Cuando la planilla muestre un nombre, código o referencia que coincida inequívocamente con uno de ellos, devolvé exactamente ese nombre canónico en articulo para cada rollo correspondiente. Si es un único artículo para toda la planilla, repetilo en todos los rollos.`
+    : null
   const customPrompt = [
     tintoreria.extraction_prompt?.trim() || null,
     pistasCatalogo,
+    pistasArticulos,
   ]
     .filter((valor): valor is string => Boolean(valor))
     .join('\n\n') || null
@@ -373,14 +398,19 @@ Si la planilla muestra un color completo o una abreviatura inequívoca, devolvé
     }
   }
 
-  const warnings = calcularWarnings(extraccion.data)
+  const calidad = evaluarCalidadExtraccion(extraccion.data, {
+    colores: nombresColores,
+    articulos: nombresArticulos,
+  })
 
   return {
     ok: true,
     imagen_path: imagenPath,
     datos: extraccion.data,
-    warnings,
+    warnings: calidad.warnings,
     metodo_lectura: textoOcr ? 'ocr' : 'visual',
+    requiere_revision: calidad.requiereRevision,
+    puntaje_calidad: calidad.puntaje,
   }
 }
 
@@ -427,12 +457,38 @@ export async function descartarPlanillaTemporal(
   return error ? { ok: false, error: error.message } : { ok: true }
 }
 
-/** Banners de fallback 3-tier: incompleto + calidad pobre. */
-function calcularWarnings(data: IngresoExtraido): string[] {
+/**
+ * Mide si el resultado es realmente utilizable. Contar filas no alcanza: una
+ * extracción sin artículo/color o con kilos que no cierran debe activar otra
+ * lectura antes de llegar al formulario.
+ */
+function evaluarCalidadExtraccion(
+  data: IngresoExtraido,
+  catalogos: { colores: string[]; articulos: string[] }
+): {
+  warnings: string[]
+  requiereRevision: boolean
+  puntaje: number
+} {
   const warnings: string[] = []
+  const coloresCanonicos = catalogos.colores.map((nombre) => ({
+    id: nombre,
+    nombre,
+  }))
+  const articulosCanonicos = catalogos.articulos.map((nombre) => ({
+    id: nombre,
+    nombre,
+  }))
 
   const declarados = data.total_rollos_declarado.value
   const extraidos = data.rollos.length
+  const tieneValor = (
+    f: { value: unknown } | null | undefined
+  ): boolean =>
+    f?.value !== null &&
+    f?.value !== undefined &&
+    String(f.value).trim() !== ''
+
   if (declarados !== null && declarados !== extraidos) {
     if (extraidos < declarados) {
       warnings.push(
@@ -448,8 +504,6 @@ function calcularWarnings(data: IngresoExtraido): string[] {
   // Solo contamos celdas CON valor. Un campo ausente (null) — ej. OT, rinde o
   // gramaje en planillas que no los traen — no es una "lectura de baja
   // confianza", así que no debe inflar el % ni disparar el banner.
-  const tieneValor = (f: { value: unknown }): boolean =>
-    f.value !== null && f.value !== undefined && String(f.value).trim() !== ''
   const pushSiTiene = (
     acc: number[],
     f: { value: unknown; confidence: number } | null | undefined
@@ -486,7 +540,80 @@ function calcularWarnings(data: IngresoExtraido): string[] {
     )
   }
 
-  return warnings
+  const totalFilas = Math.max(1, extraidos)
+  const articuloReconocido = (
+    value: string | null | undefined
+  ): boolean =>
+    articulosCanonicos.length === 0
+      ? Boolean(value?.trim())
+      : resolverArticuloCatalogo(value, articulosCanonicos) !== null
+  const colorReconocido = (value: string | null | undefined): boolean =>
+    coloresCanonicos.length === 0
+      ? Boolean(value?.trim())
+      : resolverColorCatalogo(value, coloresCanonicos) !== null
+  const articuloGlobal = articuloReconocido(data.referencia.value)
+  const colorGlobal = colorReconocido(data.color.value)
+  const articulosPresentes = data.rollos.filter(
+    (rollo) => articuloGlobal || articuloReconocido(rollo.articulo.value)
+  ).length
+  const coloresPresentes = data.rollos.filter(
+    (rollo) => colorGlobal || colorReconocido(rollo.color.value)
+  ).length
+  const kilosValidos = data.rollos.filter(
+    (rollo) =>
+      typeof rollo.kilos.value === 'number' &&
+      Number.isFinite(rollo.kilos.value) &&
+      rollo.kilos.value > 0
+  )
+  const sumaKilos = kilosValidos.reduce(
+    (total, rollo) => total + (rollo.kilos.value ?? 0),
+    0
+  )
+  const totalKilos = data.total_kilos_declarado.value
+  const diferenciaKilos =
+    typeof totalKilos === 'number' && Number.isFinite(totalKilos) && totalKilos > 0
+      ? Math.abs(totalKilos - sumaKilos)
+      : null
+  const toleranciaKilos =
+    typeof totalKilos === 'number' && totalKilos > 0
+      ? Math.max(0.5, totalKilos * 0.001)
+      : null
+  const kilosCierran =
+    diferenciaKilos === null ||
+    toleranciaKilos === null ||
+    diferenciaKilos <= toleranciaKilos
+  const cantidadCoincide =
+    typeof declarados !== 'number' || declarados <= 0 || declarados === extraidos
+
+  const coberturaFilas =
+    typeof declarados === 'number' && declarados > 0
+      ? Math.min(declarados, extraidos) / Math.max(declarados, extraidos)
+      : extraidos > 0
+        ? 1
+        : 0
+  const coberturaKilos = kilosValidos.length / totalFilas
+  const coberturaArticulos = articulosPresentes / totalFilas
+  const coberturaColores = coloresPresentes / totalFilas
+  const ajusteTotalKilos =
+    diferenciaKilos === null || typeof totalKilos !== 'number' || totalKilos <= 0
+      ? 1
+      : Math.max(0, 1 - diferenciaKilos / Math.max(1, totalKilos * 0.05))
+  const puntaje = Math.round(
+    (coberturaFilas * 40 +
+      coberturaKilos * 20 +
+      coberturaArticulos * 15 +
+      coberturaColores * 15 +
+      ajusteTotalKilos * 10) *
+      100
+  ) / 100
+  const requiereRevision =
+    !cantidadCoincide ||
+    kilosValidos.length !== extraidos ||
+    articulosPresentes !== extraidos ||
+    coloresPresentes !== extraidos ||
+    !kilosCierran
+
+  return { warnings, requiereRevision, puntaje }
 }
 
 // ── Server action: subir foto de falla por rollo ────────────

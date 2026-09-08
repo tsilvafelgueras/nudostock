@@ -114,8 +114,8 @@ async function crearReconocedor(onProgress: ProgresoCallback) {
         porcentaje: Math.round(Math.max(0, Math.min(1, base)) * 100),
         detalle:
           status === 'recognizing text'
-            ? 'Reconociendo texto'
-            : 'Preparando el OCR gratuito',
+            ? 'Leyendo los datos'
+            : 'Preparando el documento',
       })
     },
   })
@@ -244,7 +244,7 @@ async function extraerDePdf(
         }
         onProgress({
           porcentaje: 20 + Math.round(((indice + 1) / paginasEscaneadas.length) * 80),
-          detalle: `Aplicando OCR a página ${numero} de ${pdf.numPages}`,
+        detalle: `Leyendo página ${numero} de ${pdf.numPages}`,
         })
       }
     } finally {

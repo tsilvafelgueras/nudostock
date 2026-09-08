@@ -16,6 +16,7 @@ vi.mock('@google/genai', () => ({
 }))
 
 import { extraerConGemini } from './gemini'
+import type { IngresoExtraido } from './extraerPlanilla'
 
 const respuestaValida = {
   numero_remito: { value: 'R-123', confidence: 0.99 },
@@ -156,6 +157,28 @@ describe('extraerConGemini', () => {
     const result = await extraerConGemini(Buffer.from('x'), 'image/jpeg', null)
 
     expect(result).toMatchObject({ ok: false, codigo: 'FORMATO_INVALIDO' })
+  })
+
+  it('recupera kilos faltantes cuando metros y rendimiento permiten calcularlos', async () => {
+    const respuestaSinKilos: IngresoExtraido = structuredClone(respuestaValida)
+    respuestaSinKilos.rollos[0].kilos = { value: null, confidence: 0 }
+    respuestaSinKilos.rollos[0].metros = { value: 50, confidence: 0.9 }
+    respuestaSinKilos.rollos[0].ratio = { value: 2, confidence: 0.8 }
+    mocks.generateContent.mockResolvedValue({
+      text: JSON.stringify(respuestaSinKilos),
+      usageMetadata: {},
+    })
+
+    const result = await extraerConGemini(
+      Buffer.from('x'),
+      'image/jpeg',
+      null
+    )
+
+    expect(result.ok && result.data.rollos[0].kilos).toEqual({
+      value: 25,
+      confidence: 0.68,
+    })
   })
 
   it('informa cuando Gemini devuelve JSON inválido', async () => {

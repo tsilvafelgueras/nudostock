@@ -59,6 +59,7 @@ function crearSupabaseFake(opciones?: {
   prompt?: string | null
   role?: string
   colores?: string[]
+  articulos?: string[]
 }) {
   const storageApi = {
     createSignedUploadUrl: vi.fn().mockResolvedValue({
@@ -83,6 +84,14 @@ function crearSupabaseFake(opciones?: {
             data: (opciones?.colores ?? ['Blanco', 'Azul Marino']).map(
               (nombre) => ({ nombre })
             ),
+            error: null,
+          }
+        }
+        if (tabla === 'articulos') {
+          return {
+            data: (opciones?.articulos ?? ['ML70 Frisada']).map((nombre) => ({
+              nombre,
+            })),
             error: null,
           }
         }
@@ -198,6 +207,8 @@ describe('Server Actions de extracción directa', () => {
     const prompt = mocks.extraerPlanilla.mock.calls[0][2]
     expect(prompt).toContain('CATÁLOGO CANÓNICO DE COLORES')
     expect(prompt).toContain('["Blanco","Azul Marino"]')
+    expect(prompt).toContain('CATÁLOGO CANÓNICO DE ARTÍCULOS')
+    expect(prompt).toContain('["ML70 Frisada"]')
   })
 
   it('normaliza y reenvía el OCR local al contrato universal', async () => {
@@ -216,6 +227,43 @@ describe('Server Actions de extracción directa', () => {
     expect(mocks.extraerPlanilla.mock.calls[0][3]).toBe(
       'REMITO 123 FECHA 08/09/2026\nPIEZA    KILOS    COLOR\n001      20,5     NEGRO'
     )
+  })
+
+  it('marca para segunda lectura un resultado con campos críticos incompletos', async () => {
+    const fake = crearSupabaseFake()
+    mocks.createClient.mockResolvedValue(fake.supabase)
+    mocks.extraerPlanilla.mockResolvedValue({
+      ok: true,
+      data: {
+        ...datosExtraidos,
+        color: { value: null, confidence: 0 },
+        referencia: { value: null, confidence: 0 },
+        total_kilos_declarado: { value: 20, confidence: 1 },
+        rollos: [
+          {
+            ...datosExtraidos.rollos[0],
+            kilos: { value: null, confidence: 0 },
+            articulo: { value: null, confidence: 0 },
+            color: { value: null, confidence: 0 },
+          },
+        ],
+      },
+    })
+
+    const result = await procesarPlanillaConIA({
+      imagen_path: PATH_VALIDO,
+      mime_type: 'image/jpeg',
+      tintoreria_id: TINTORERIA_ID,
+      texto_ocr:
+        'REMITO 123 FECHA 08/09/2026\nPIEZA    KILOS    COLOR\n001      ilegible  ilegible',
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      requiere_revision: true,
+      metodo_lectura: 'ocr',
+    })
+    expect(result.ok && result.puntaje_calidad).toBeLessThan(90)
   })
 
   it('rechaza un path perteneciente a otra empresa antes de descargarlo', async () => {
