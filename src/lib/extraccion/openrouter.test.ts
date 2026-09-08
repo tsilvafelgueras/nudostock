@@ -53,7 +53,7 @@ describe('extraerConOpenRouter', () => {
     delete process.env.OPENROUTER_FALLBACK_MODEL
   })
 
-  it('usa el router gratuito con imagen y JSON Schema', async () => {
+  it('usa el router gratuito dinámico con imagen y JSON Schema', async () => {
     const result = await extraerConOpenRouter(
       Buffer.from([0, 1, 2]),
       'image/png',
@@ -69,7 +69,7 @@ describe('extraerConOpenRouter', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(options.headers.Authorization).toBe('Bearer test-openrouter-key')
     const body = JSON.parse(options.body)
-    expect(body.model).toBe('dots-studio/dots-3-note-preview:free')
+    expect(body.model).toBe('openrouter/free')
     expect(body.messages[0].content[0].text).toContain('PROMPT PARTICULAR')
     expect(body.messages[0].content[0].text).toContain(
       'CONTRATO UNIVERSAL DE EXTRACCIÓN'

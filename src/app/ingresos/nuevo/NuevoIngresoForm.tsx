@@ -591,7 +591,13 @@ export default function NuevoIngresoForm({
       // Si la prelectura no alcanza o la estructura resultante no es
       // guardable, hacemos automáticamente una segunda lectura sobre el
       // archivo original. Entre ambos resultados conservamos el más completo.
-      if (textoOcr && (!result.ok || result.requiere_revision)) {
+      const reintentarConArchivo =
+        textoOcr &&
+        (result.ok
+          ? result.requiere_revision
+          : result.codigo === 'FORMATO_INVALIDO' ||
+            result.codigo === 'JSON_INVALID')
+      if (reintentarConArchivo) {
         const resultadoInicial = result
         const resultadoArchivo = await procesarPlanillaConIA({
           imagen_path: path,

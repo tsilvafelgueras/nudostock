@@ -2,10 +2,11 @@ import type { ExtraccionResult } from './extraerPlanilla'
 import { buildPrompt } from './prompt'
 import { interpretarRespuestaIA } from './resultado'
 
-// Gemma 4 anuncia soporte de salida estructurada en el catálogo, pero su
-// endpoint gratuito rechaza la combinación visual + json_schema que necesita
-// esta app. Mantenerlo en la cadena sólo agrega un fallo inevitable.
-const MODELOS_FALLBACK = ['dots-studio/dots-3-note-preview:free'] as const
+// La disponibilidad de los modelos gratuitos cambia con frecuencia. El router
+// oficial elige en cada llamada uno que admita las capacidades solicitadas
+// (imagen cuando corresponda y salida estructurada), en lugar de dejarnos
+// atados a un preview concreto que puede estar saturado o desaparecer.
+const MODELOS_FALLBACK = ['openrouter/free'] as const
 const TIMEOUT_MS = 50_000
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
