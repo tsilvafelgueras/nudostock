@@ -58,6 +58,7 @@ function crearSupabaseFake(opciones?: {
   vinculada?: boolean
   prompt?: string | null
   role?: string
+  colores?: string[]
 }) {
   const storageApi = {
     createSignedUploadUrl: vi.fn().mockResolvedValue({
@@ -76,6 +77,17 @@ function crearSupabaseFake(opciones?: {
       select: vi.fn(() => query),
       eq: vi.fn(() => query),
       limit: vi.fn(() => query),
+      order: vi.fn(async () => {
+        if (tabla === 'colores') {
+          return {
+            data: (opciones?.colores ?? ['Blanco', 'Azul Marino']).map(
+              (nombre) => ({ nombre })
+            ),
+            error: null,
+          }
+        }
+        return { data: null, error: null }
+      }),
       single: vi.fn(async () => {
         if (tabla === 'profiles') {
           return {
@@ -180,8 +192,11 @@ describe('Server Actions de extracción directa', () => {
     expect(mocks.extraerPlanilla).toHaveBeenCalledWith(
       expect.any(Buffer),
       'image/jpeg',
-      'PROMPT INTERNO GALFIONE'
+      expect.stringContaining('PROMPT INTERNO GALFIONE')
     )
+    const prompt = mocks.extraerPlanilla.mock.calls[0][2]
+    expect(prompt).toContain('CATÁLOGO CANÓNICO DE COLORES')
+    expect(prompt).toContain('["Blanco","Azul Marino"]')
   })
 
   it('rechaza un path perteneciente a otra empresa antes de descargarlo', async () => {

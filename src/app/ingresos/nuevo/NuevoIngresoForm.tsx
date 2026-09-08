@@ -26,6 +26,7 @@ import SearchableCombobox from '@/components/SearchableCombobox'
 import type { CodeScannerResult } from '@/components/CodeScanner'
 import { extraerCodigoCandidato } from '@/lib/scanner'
 import type { PatronCodigo } from '@/lib/scanner'
+import { resolverColorCatalogo } from '@/lib/coloresMatching'
 import {
   formatBytes,
   MAX_PLANILLA_BYTES,
@@ -70,12 +71,6 @@ function normNombre(s: string): string {
     .toLowerCase()
     .trim()
     .replace(/\s+/g, ' ')
-}
-
-function normColor(raw: string | null | undefined): string | null {
-  const trimmed = raw?.trim()
-  if (!trimmed) return null
-  return trimmed.toLowerCase().replace(/\b\p{L}/gu, (c) => c.toUpperCase())
 }
 
 /** Tokeniza un nombre normalizado en palabras significativas (len ≥ 2). */
@@ -590,11 +585,9 @@ export default function NuevoIngresoForm({
     )
 
     // Resolución de color: matchea el texto extraído contra el catálogo
-    // por nombre normalizado. Devuelve el ID o null.
+    // tolerando casing, etiquetas y abreviaturas no ambiguas.
     function colorIdFromText(raw: string | null | undefined): string | null {
-      const norm = normColor(raw)
-      if (!norm) return null
-      return colores.find((c) => c.nombre === norm)?.id ?? null
+      return resolverColorCatalogo(raw, colores)
     }
     const colorGlobalId = colorIdFromText(datos.color.value)
     if (colorGlobalId) setBulkColorId(colorGlobalId)

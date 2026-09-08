@@ -279,11 +279,21 @@ export async function procesarPlanillaConIA(
     }
   }
 
-  const { data: tintoreria, error: tintoreriaError } = await supabase
-    .from('tintorerias')
-    .select('extraction_prompt')
-    .eq('id', tintoreriaId)
-    .single()
+  const [
+    { data: tintoreria, error: tintoreriaError },
+    { data: coloresCatalogo, error: coloresError },
+  ] = await Promise.all([
+    supabase
+      .from('tintorerias')
+      .select('extraction_prompt')
+      .eq('id', tintoreriaId)
+      .single(),
+    supabase
+      .from('colores')
+      .select('nombre')
+      .eq('activo', true)
+      .order('nombre'),
+  ])
 
   if (tintoreriaError || !tintoreria) {
     return {
@@ -294,7 +304,26 @@ export async function procesarPlanillaConIA(
     }
   }
 
-  const customPrompt = tintoreria?.extraction_prompt ?? null
+  if (coloresError) {
+    console.warn(
+      `[extraccion] no se pudo cargar el catálogo de colores: ${coloresError.message}`
+    )
+  }
+  const nombresColores = (coloresCatalogo ?? [])
+    .map(({ nombre }) => nombre.trim())
+    .filter(Boolean)
+    .slice(0, 250)
+  const pistasCatalogo = nombresColores.length
+    ? `# CATÁLOGO CANÓNICO DE COLORES DE LA APP
+Los colores válidos son: ${JSON.stringify(nombresColores)}.
+Si la planilla muestra un color completo o una abreviatura inequívoca, devolvé exactamente el nombre canónico correspondiente de esta lista. Si es un color único para todo el despacho, colocalo en el campo color del header. No dejes color en null cuando la etiqueta COLOR sea legible.`
+    : null
+  const customPrompt = [
+    tintoreria.extraction_prompt?.trim() || null,
+    pistasCatalogo,
+  ]
+    .filter((valor): valor is string => Boolean(valor))
+    .join('\n\n') || null
 
   const { data: archivo, error: descargaError } = await supabase.storage
     .from(PLANILLAS_BUCKET)
