@@ -31,6 +31,16 @@ La app necesita recibir todos los datos visibles del remito en el JSON definido 
 - Si \`total_rollos_declarado\` indica N, verificá antes de responder que \`rollos\` tenga N elementos. Si faltan, volvé a recorrer todos los bloques y páginas para incorporarlos.
 - No inventes filas para completar N: si una fila es parcialmente ilegible, incluí igualmente el rollo con los campos visibles y usá \`null\` más confianza 0 para lo que no pueda leerse.
 
+# UNIDADES Y TOTALES — REGLA CRÍTICA
+
+- No confundas KILOS con METROS: son columnas y magnitudes distintas.
+- \`kilos\` contiene únicamente el peso en KG de la fila; \`metros\` contiene únicamente el largo en MTS de la fila.
+- \`total_kilos_declarado\` contiene exclusivamente el TOTAL KG, KILOS o PESO TOTAL impreso. Nunca le asignes un TOTAL MTS, METROS o longitud total.
+- Antes de responder, sumá por separado los kilos y los metros de todos los rollos y comparalos con los totales impresos.
+- Si un total impreso coincide con la suma de \`metros\`, es TOTAL METROS y no debe ir en \`total_kilos_declarado\`.
+- El total de kilos debe coincidir aproximadamente con la suma de \`kilos\`. Si no hay un total de kilos explícito pero todos los kilos son legibles, devolvé esa suma con confidence máximo 0.85.
+- Como control cruzado, cuando existan las tres cifras debe cumplirse aproximadamente: kilos = metros / ratio. Usá esta relación para detectar columnas intercambiadas, no para reemplazar un valor claramente impreso.
+
 # HEADER (datos del lote/despacho, uno solo)
 
 - numero_remito: número de la planilla. Aparece como "DESPACHO N°", "REMITO N°", "N° DE REMITO" o similar. Suele estar en una esquina, a veces con código de barras al lado.
@@ -40,13 +50,13 @@ La app necesita recibir todos los datos visibles del remito en el JSON definido 
 - rem_tejeduria: remito de tejeduría ("REM. TEJ.", "REM TEJEDURIA"), del proveedor de tela cruda.
 - referencia: código interno (ej "SBI"), suele ser 2-5 letras.
 - total_rollos_declarado: número total de rollos.
-- total_kilos_declarado: kilos despachados (NO ingresados).
+- total_kilos_declarado: peso total despachado en KG (NO ingresados). Debe ser TOTAL KG/KILOS/PESO, nunca TOTAL MTS/METROS.
 
 # POR CADA ROLLO
 
 - numero_pieza: identificador del rollo. String, conservar ceros a la izquierda.
-- kilos: peso en kg (decimal, punto NO coma).
-- metros: largo en metros (decimal).
+- kilos: peso de la fila en KG (decimal, punto NO coma). Leer solo la columna rotulada KG, KILOS o PESO; no intercambiarla con metros.
+- metros: largo de la fila en MTS (decimal). Leer solo la columna rotulada MTS, METROS o LARGO; no intercambiarla con kilos.
 - ratio: rendimiento m/kg (decimal). A veces "Ratio", "Rdto", "Rto".
 - gramaje_planilla: g/m² (peso por m²). Suele aparecer como "Pm2", "Gramaje", "g/m²".
 - articulo: nombre del artículo/tela del rollo (ej "Algodón Pima", "Modal", "Lino"). Algunas planillas traen un único artículo en el header (en ese caso, copialo en todos los rollos). Otras traen una columna "Artículo" o "Tela" por rollo. Si no aparece en ninguna parte, devolvé value: null y confidence: 0.

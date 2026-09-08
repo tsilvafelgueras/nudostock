@@ -91,6 +91,9 @@ describe('extraerConGemini', () => {
       'Estas pistas complementan el contrato universal'
     )
     expect(request.contents[0].parts[1].text).toContain('POR CADA ROLLO')
+    expect(request.contents[0].parts[1].text).toContain(
+      'Nunca le asignes un TOTAL MTS'
+    )
     expect(request.config.responseMimeType).toBe('application/json')
     expect(request.config.responseSchema).toBeDefined()
     expect(request.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' })
