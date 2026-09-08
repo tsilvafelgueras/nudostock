@@ -2,10 +2,10 @@ import type { ExtraccionResult } from './extraerPlanilla'
 import { buildPrompt } from './prompt'
 import { interpretarRespuestaIA } from './resultado'
 
-const MODELOS_FALLBACK = [
-  'google/gemma-4-31b-it:free',
-  'dots-studio/dots-3-note-preview:free',
-] as const
+// Gemma 4 anuncia soporte de salida estructurada en el catálogo, pero su
+// endpoint gratuito rechaza la combinación visual + json_schema que necesita
+// esta app. Mantenerlo en la cadena sólo agrega un fallo inevitable.
+const MODELOS_FALLBACK = ['dots-studio/dots-3-note-preview:free'] as const
 const TIMEOUT_MS = 50_000
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 

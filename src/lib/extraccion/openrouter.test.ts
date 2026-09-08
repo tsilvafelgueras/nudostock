@@ -69,7 +69,7 @@ describe('extraerConOpenRouter', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(options.headers.Authorization).toBe('Bearer test-openrouter-key')
     const body = JSON.parse(options.body)
-    expect(body.model).toBe('google/gemma-4-31b-it:free')
+    expect(body.model).toBe('dots-studio/dots-3-note-preview:free')
     expect(body.messages[0].content[0].text).toContain('PROMPT PARTICULAR')
     expect(body.messages[0].content[0].text).toContain(
       'CONTRATO UNIVERSAL DE EXTRACCIÓN'

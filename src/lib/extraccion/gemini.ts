@@ -192,9 +192,9 @@ function diagnosticarError(e: unknown): DiagnosticoError {
   }
 }
 
-/** Ejecuta una sola llamada. La selección del proveedor alternativo vive en
- * `extraerPlanilla`, para que un fallo de Gemini pueda derivarse a OpenRouter sin
- * consumir primero todo el tiempo disponible en reintentos del mismo servicio.
+/** Ejecuta una sola llamada. La coordinación de proveedores vive en
+ * `extraerPlanilla`, que puede ejecutar los respaldos en paralelo sin repartir
+ * secuencialmente el tiempo disponible.
  */
 export async function extraerConGemini(
   fileBuffer: Buffer,

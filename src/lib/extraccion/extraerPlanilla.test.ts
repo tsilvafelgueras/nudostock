@@ -97,7 +97,7 @@ describe('extraerPlanilla', () => {
     expect(mocks.openrouter).not.toHaveBeenCalled()
   })
 
-  it('pasa inmediatamente a OpenRouter cuando Gemini falla', async () => {
+  it('ejecuta los respaldos en paralelo cuando Gemini falla', async () => {
     process.env.OPENROUTER_API_KEY = 'openrouter-key'
     mocks.gemini.mockResolvedValue(timeout)
     mocks.openrouter.mockResolvedValue(exito)
@@ -105,8 +105,8 @@ describe('extraerPlanilla', () => {
     const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
 
     expect(result).toBe(exito)
-    expect(mocks.gemini).toHaveBeenCalledTimes(1)
-    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(2)
   })
 
   it('prueba el segundo Gemini si también falla OpenRouter', async () => {
@@ -125,10 +125,10 @@ describe('extraerPlanilla', () => {
     expect(mocks.gemini).toHaveBeenCalledTimes(2)
     expect(mocks.gemini.mock.calls[1][3]).toBe('gemini-respaldo')
     expect(mocks.gemini.mock.calls[0][4]).toBeLessThanOrEqual(45_000)
-    expect(mocks.openrouter.mock.calls[0][3]).toBeLessThanOrEqual(45_000)
+    expect(mocks.openrouter.mock.calls[0][3]).toBeLessThanOrEqual(60_000)
     expect(mocks.openrouter.mock.calls[0][4]).toBe('openrouter-vision-a')
     expect(mocks.openrouter.mock.calls[1][4]).toBe('openrouter-vision-b')
-    expect(mocks.gemini.mock.calls[1][4]).toBeLessThanOrEqual(30_000)
+    expect(mocks.gemini.mock.calls[1][4]).toBeLessThanOrEqual(60_000)
   })
 
   it('prueba el segundo modelo visual de OpenRouter si el primero no devuelve JSON', async () => {
@@ -148,7 +148,7 @@ describe('extraerPlanilla', () => {
     expect(mocks.openrouter).toHaveBeenCalledTimes(2)
     expect(mocks.openrouter.mock.calls[0][4]).toBe('openrouter-vision-a')
     expect(mocks.openrouter.mock.calls[1][4]).toBe('openrouter-vision-b')
-    expect(mocks.gemini).toHaveBeenCalledTimes(1)
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
   })
 
   it('continúa al siguiente proveedor si recibe menos rollos que los declarados', async () => {
@@ -161,8 +161,35 @@ describe('extraerPlanilla', () => {
     const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
 
     expect(result).toBe(completo)
-    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
-    expect(mocks.gemini).toHaveBeenCalledTimes(1)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(2)
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
+  })
+
+  it('no acepta un falso 1/1 si otro respaldo encuentra todos los rollos', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    const falsoCompleto = exitoConCantidad(1, 1)
+    const completo = exitoConCantidad(24, 24)
+    mocks.gemini.mockResolvedValueOnce(timeout).mockResolvedValueOnce(completo)
+    mocks.openrouter.mockResolvedValue(falsoCompleto)
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(completo)
+    expect(result.ok && result.data.rollos).toHaveLength(24)
+  })
+
+  it('en un empate elige el respaldo con más campos completos', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    const conColor = structuredClone(exito)
+    if (!conColor.ok) throw new Error('Fixture inválido')
+    conColor.data.color = { value: 'NEGRO', confidence: 1 }
+    mocks.gemini.mockResolvedValueOnce(timeout).mockResolvedValueOnce(conColor)
+    mocks.openrouter.mockResolvedValue(exito)
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(conColor)
+    expect(result.ok && result.data.color.value).toBe('NEGRO')
   })
 
   it('llega a Gemini de respaldo si OpenRouter devuelve una extracción parcial', async () => {

@@ -71,14 +71,20 @@ type CandidatoParcial = {
   resultado: ResultadoExitoso
 }
 
+type IntentoPendiente = {
+  proveedor: string
+  proveedorLog: string
+  modelo: string
+  ejecutar: () => Promise<ExtraccionResult>
+}
+
 // La Server Action dispone de 120 s. Reservamos 15 s para descargar el archivo,
-// serializar la respuesta y cualquier latencia de la plataforma.
+// serializar la respuesta y cualquier latencia de la plataforma. Después del
+// intento principal, los respaldos corren en paralelo para que un proveedor
+// lento no consuma el tiempo disponible del siguiente.
 const PRESUPUESTO_TOTAL_MS = 105_000
 const TIMEOUT_GEMINI_PRINCIPAL_MS = 45_000
-const TIMEOUT_OPENROUTER_MAX_MS = 75_000
-const TIMEOUT_OPENROUTER_POR_MODELO_MAX_MS = 45_000
-const TIMEOUT_GEMINI_FALLBACK_MAX_MS = 30_000
-const RESERVA_GEMINI_FALLBACK_MS = 15_000
+const TIMEOUT_FALLBACK_PARALELO_MAX_MS = 60_000
 const TIMEOUT_MINIMO_INTENTO_MS = 8_000
 
 function idExtraccion(): string {
@@ -106,6 +112,41 @@ async function ejecutarIntento(
   return resultado
 }
 
+function cantidadValoresExtraidos(resultado: ResultadoExitoso): number {
+  const { data } = resultado
+  const conValor = (campo: Field<unknown>) =>
+    campo.value !== null &&
+    campo.value !== undefined &&
+    (typeof campo.value !== 'string' || campo.value.trim().length > 0)
+
+  const header = [
+    data.numero_remito,
+    data.fecha,
+    data.color,
+    data.ot,
+    data.rem_tejeduria,
+    data.referencia,
+    data.total_rollos_declarado,
+    data.total_kilos_declarado,
+  ].filter(conValor).length
+  const rollos = data.rollos.reduce(
+    (total, rollo) =>
+      total +
+      [
+        rollo.numero_pieza,
+        rollo.kilos,
+        rollo.metros,
+        rollo.ratio,
+        rollo.gramaje_planilla,
+        rollo.articulo,
+        rollo.color,
+      ].filter(conValor).length,
+    0
+  )
+
+  return header + rollos
+}
+
 /**
  * Procesa una imagen (JPG/PNG) o PDF de planilla y devuelve los datos
  * estructurados con confianza por campo.
@@ -115,9 +156,9 @@ async function ejecutarIntento(
  * @param customPrompt Pistas de layout y alias de la tintorería (campo
  *   `tintorerias.extraction_prompt` en DB), agregadas al contrato universal.
  *
- * Gemini es el proveedor principal, OpenRouter es el respaldo independiente y
- * el segundo modelo de Gemini queda como tercer y último intento. Los tres
- * comparten un presupuesto de tiempo menor al límite de la Server Action.
+ * Gemini es el proveedor principal. Si falla o devuelve menos rollos que los
+ * declarados, OpenRouter y el segundo Gemini se ejecutan en paralelo. Los
+ * intentos comparten un presupuesto menor al límite de la Server Action.
  */
 export async function extraerPlanilla(
   fileBuffer: Buffer,
@@ -142,15 +183,18 @@ export async function extraerPlanilla(
     modelo: string,
     resultado: ResultadoFallido
   ) => fallos.push({ proveedor, modelo, ...resultado })
+  const registrarTotalDeclarado = (resultado: ResultadoExitoso) => {
+    const total = resultado.data.total_rollos_declarado.value
+    if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
+      mayorTotalDeclarado = Math.max(mayorTotalDeclarado, Math.floor(total))
+    }
+  }
   const aceptarORegistrarParcial = (
     proveedor: string,
     modelo: string,
     resultado: ResultadoExitoso
   ): boolean => {
-    const total = resultado.data.total_rollos_declarado.value
-    if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
-      mayorTotalDeclarado = Math.max(mayorTotalDeclarado, Math.floor(total))
-    }
+    registrarTotalDeclarado(resultado)
 
     const extraidos = resultado.data.rollos.length
     if (mayorTotalDeclarado > 0 && extraidos < mayorTotalDeclarado) {
@@ -208,71 +252,36 @@ export async function extraerPlanilla(
     Boolean(process.env.GEMINI_API_KEY?.trim()) &&
     modeloFallback !== modeloPrincipal
 
-  if (process.env.OPENROUTER_API_KEY?.trim()) {
+  const intentosFallback: IntentoPendiente[] = []
+  const timeoutFallback = Math.min(
+    TIMEOUT_FALLBACK_PARALELO_MAX_MS,
+    restante()
+  )
+
+  if (
+    timeoutFallback >= TIMEOUT_MINIMO_INTENTO_MS &&
+    process.env.OPENROUTER_API_KEY?.trim()
+  ) {
     const {
       archivoCompatibleConOpenRouter,
       extraerConOpenRouter,
       modelosOpenRouterFallback,
     } = await import('./openrouter')
     if (archivoCompatibleConOpenRouter(mimeType)) {
-      const modelosOpenRouter = modelosOpenRouterFallback()
-      const reservaFallback = puedeUsarGeminiFallback
-        ? RESERVA_GEMINI_FALLBACK_MS
-        : 0
-      const presupuestoOpenRouter = Math.min(
-        TIMEOUT_OPENROUTER_MAX_MS,
-        Math.max(0, restante() - reservaFallback)
-      )
-      const deadlineOpenRouter = Date.now() + presupuestoOpenRouter
-
-      for (const modeloOpenRouter of modelosOpenRouter) {
-        const restanteOpenRouter = Math.min(
-          Math.max(0, deadlineOpenRouter - Date.now()),
-          Math.max(0, restante() - reservaFallback)
-        )
-        const timeoutOpenRouter = Math.min(
-          TIMEOUT_OPENROUTER_POR_MODELO_MAX_MS,
-          restanteOpenRouter
-        )
-        if (timeoutOpenRouter < TIMEOUT_MINIMO_INTENTO_MS) {
-          console.warn(
-            `[extraccion:${id}] OpenRouter ${modeloOpenRouter} omitido: presupuesto insuficiente restante_ms=${restante()}`
-          )
-          break
-        }
-
-        console.warn(
-          `[extraccion:${id}] activando OpenRouter modelo=${modeloOpenRouter} por ${resultadoPrincipal.ok ? 'EXTRACCION_INCOMPLETA' : resultadoPrincipal.codigo}; restante_ms=${restante()}`
-        )
-        const resultadoOpenRouter = await ejecutarIntento(
-          id,
-          'openrouter',
-          modeloOpenRouter,
-          timeoutOpenRouter,
-          fileBuffer,
-          mimeType,
-          () =>
+      for (const modelo of modelosOpenRouterFallback()) {
+        intentosFallback.push({
+          proveedor: 'OpenRouter',
+          proveedorLog: 'openrouter',
+          modelo,
+          ejecutar: () =>
             extraerConOpenRouter(
               fileBuffer,
               mimeType,
               customPrompt,
-              timeoutOpenRouter,
-              modeloOpenRouter
-            )
-        )
-        if (resultadoOpenRouter.ok) {
-          if (
-            aceptarORegistrarParcial(
-              'OpenRouter',
-              modeloOpenRouter,
-              resultadoOpenRouter
-            )
-          ) {
-            return resultadoOpenRouter
-          }
-        } else {
-          registrarFallo('OpenRouter', modeloOpenRouter, resultadoOpenRouter)
-        }
+              timeoutFallback,
+              modelo
+            ),
+        })
       }
     } else {
       console.warn(
@@ -281,49 +290,94 @@ export async function extraerPlanilla(
     }
   }
 
-  if (puedeUsarGeminiFallback) {
-    const timeoutFallback = Math.min(
-      TIMEOUT_GEMINI_FALLBACK_MAX_MS,
-      restante()
+  if (
+    timeoutFallback >= TIMEOUT_MINIMO_INTENTO_MS &&
+    puedeUsarGeminiFallback
+  ) {
+    intentosFallback.push({
+      proveedor: 'Gemini respaldo',
+      proveedorLog: 'gemini',
+      modelo: modeloFallback,
+      ejecutar: () =>
+        extraerConGemini(
+          fileBuffer,
+          mimeType,
+          customPrompt,
+          modeloFallback,
+          timeoutFallback
+        ),
+    })
+  }
+
+  if (intentosFallback.length > 0) {
+    console.warn(
+      `[extraccion:${id}] activando respaldos en paralelo intentos=${intentosFallback.length} timeout_ms=${timeoutFallback} motivo=${resultadoPrincipal.ok ? 'EXTRACCION_INCOMPLETA' : resultadoPrincipal.codigo}`
     )
-    if (timeoutFallback >= TIMEOUT_MINIMO_INTENTO_MS) {
-      console.warn(
-        `[extraccion:${id}] activando Gemini de respaldo; restante_ms=${restante()}`
-      )
-      const resultadoFallback = await ejecutarIntento(
-        id,
-        'gemini',
-        modeloFallback,
-        timeoutFallback,
-        fileBuffer,
-        mimeType,
-        () =>
-          extraerConGemini(
-            fileBuffer,
-            mimeType,
-            customPrompt,
-            modeloFallback,
-            timeoutFallback
-          )
-      )
-      if (resultadoFallback.ok) {
+    const resultadosFallback = await Promise.all(
+      intentosFallback.map(async (intento) => ({
+        intento,
+        resultado: await ejecutarIntento(
+          id,
+          intento.proveedorLog,
+          intento.modelo,
+          timeoutFallback,
+          fileBuffer,
+          mimeType,
+          intento.ejecutar
+        ),
+      }))
+    )
+
+    // Todos terminaron: primero consolidamos el mayor total declarado. Esto
+    // evita aceptar un falso 1/1 de un proveedor cuando otro leyó 24 rollos.
+    for (const { resultado } of resultadosFallback) {
+      if (resultado.ok) registrarTotalDeclarado(resultado)
+    }
+
+    const candidatosCompletos: CandidatoParcial[] = []
+    for (const { intento, resultado } of resultadosFallback) {
+      if (resultado.ok) {
         if (
           aceptarORegistrarParcial(
-            'Gemini respaldo',
-            modeloFallback,
-            resultadoFallback
+            intento.proveedor,
+            intento.modelo,
+            resultado
           )
         ) {
-          return resultadoFallback
+          candidatosCompletos.push({
+            proveedor: intento.proveedor,
+            modelo: intento.modelo,
+            resultado,
+          })
         }
       } else {
-        registrarFallo('Gemini respaldo', modeloFallback, resultadoFallback)
+        registrarFallo(intento.proveedor, intento.modelo, resultado)
       }
-    } else {
-      console.warn(
-        `[extraccion:${id}] Gemini de respaldo omitido: presupuesto insuficiente restante_ms=${restante()}`
-      )
     }
+
+    if (candidatosCompletos.length > 0) {
+      // Si más de un respaldo funcionó, priorizamos cantidad de filas y luego
+      // cantidad de campos completos (por ejemplo, no perder el color).
+      const mejorCompleto = candidatosCompletos.reduce((mejor, candidato) => {
+        const filasCandidato = candidato.resultado.data.rollos.length
+        const filasMejor = mejor.resultado.data.rollos.length
+        if (filasCandidato !== filasMejor) {
+          return filasCandidato > filasMejor ? candidato : mejor
+        }
+        return cantidadValoresExtraidos(candidato.resultado) >
+          cantidadValoresExtraidos(mejor.resultado)
+          ? candidato
+          : mejor
+      })
+      console.info(
+        `[extraccion:${id}] resultado elegido proveedor=${mejorCompleto.proveedor} modelo=${mejorCompleto.modelo} extraidos=${mejorCompleto.resultado.data.rollos.length} declarados=${mayorTotalDeclarado}`
+      )
+      return mejorCompleto.resultado
+    }
+  } else if (restante() < TIMEOUT_MINIMO_INTENTO_MS) {
+    console.warn(
+      `[extraccion:${id}] respaldos omitidos: presupuesto insuficiente restante_ms=${restante()}`
+    )
   }
 
   if (
