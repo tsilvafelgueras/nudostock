@@ -209,6 +209,13 @@ describe('Server Actions de extracción directa', () => {
     expect(prompt).toContain('["Blanco","Azul Marino"]')
     expect(prompt).toContain('CATÁLOGO CANÓNICO DE ARTÍCULOS')
     expect(prompt).toContain('["ML70 Frisada"]')
+
+    for (const tabla of ['articulos', 'colores']) {
+      const indice = fake.from.mock.calls.findIndex(([nombre]) => nombre === tabla)
+      const query = fake.from.mock.results[indice]?.value
+      expect(query?.eq).toHaveBeenCalledWith('empresa_id', EMPRESA_ID)
+      expect(query?.eq).toHaveBeenCalledWith('activo', true)
+    }
   })
 
   it('normaliza y reenvía el OCR local al contrato universal', async () => {

@@ -306,11 +306,13 @@ export async function procesarPlanillaConIA(
     supabase
       .from('colores')
       .select('nombre')
+      .eq('empresa_id', profile.empresa_id)
       .eq('activo', true)
       .order('nombre'),
     supabase
       .from('articulos')
       .select('nombre')
+      .eq('empresa_id', profile.empresa_id)
       .eq('activo', true)
       .order('nombre'),
   ])
