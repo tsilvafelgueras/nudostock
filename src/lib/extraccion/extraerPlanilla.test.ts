@@ -17,6 +17,10 @@ vi.mock('./openrouter', () => ({
   extraerConOpenRouter: mocks.openrouter,
   archivoCompatibleConOpenRouter: mocks.compatible,
   modeloOpenRouterFallback: () => 'openrouter-gratis',
+  modelosOpenRouterFallback: () => [
+    'openrouter-vision-a',
+    'openrouter-vision-b',
+  ],
 }))
 
 import { extraerPlanilla } from './extraerPlanilla'
@@ -117,13 +121,34 @@ describe('extraerPlanilla', () => {
     const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
 
     expect(result).toBe(exito)
-    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(2)
     expect(mocks.gemini).toHaveBeenCalledTimes(2)
     expect(mocks.gemini.mock.calls[1][3]).toBe('gemini-respaldo')
     expect(mocks.gemini.mock.calls[0][4]).toBeLessThanOrEqual(45_000)
-    expect(mocks.openrouter.mock.calls[0][3]).toBeGreaterThan(50_000)
-    expect(mocks.openrouter.mock.calls[0][3]).toBeLessThanOrEqual(75_000)
+    expect(mocks.openrouter.mock.calls[0][3]).toBeLessThanOrEqual(45_000)
+    expect(mocks.openrouter.mock.calls[0][4]).toBe('openrouter-vision-a')
+    expect(mocks.openrouter.mock.calls[1][4]).toBe('openrouter-vision-b')
     expect(mocks.gemini.mock.calls[1][4]).toBeLessThanOrEqual(30_000)
+  })
+
+  it('prueba el segundo modelo visual de OpenRouter si el primero no devuelve JSON', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    mocks.gemini.mockResolvedValue(timeout)
+    mocks.openrouter
+      .mockResolvedValueOnce({
+        ok: false,
+        codigo: 'JSON_INVALID',
+        error: 'respuesta no estructurada',
+      })
+      .mockResolvedValueOnce(exito)
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(exito)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(2)
+    expect(mocks.openrouter.mock.calls[0][4]).toBe('openrouter-vision-a')
+    expect(mocks.openrouter.mock.calls[1][4]).toBe('openrouter-vision-b')
+    expect(mocks.gemini).toHaveBeenCalledTimes(1)
   })
 
   it('continúa al siguiente proveedor si recibe menos rollos que los declarados', async () => {
@@ -150,7 +175,7 @@ describe('extraerPlanilla', () => {
     const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
 
     expect(result).toBe(completo)
-    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(2)
     expect(mocks.gemini).toHaveBeenCalledTimes(2)
   })
 
@@ -213,5 +238,26 @@ describe('extraerPlanilla', () => {
     expect(result.ok || result.error).toContain('OpenRouter')
     expect(result.ok || result.error).toContain('gemini-respaldo')
     expect(mocks.gemini).toHaveBeenCalledTimes(2)
+  })
+
+  it('no oculta las fallas de Gemini detrás de un JSON inválido de OpenRouter', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    mocks.gemini.mockResolvedValue(timeout)
+    mocks.openrouter.mockResolvedValue({
+      ok: false,
+      codigo: 'JSON_INVALID',
+      error: 'el modelo gratuito respondió texto libre',
+    })
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'application/pdf', null)
+
+    expect(result).toMatchObject({
+      ok: false,
+      codigo: 'AI_ALL_PROVIDERS_FAILED',
+    })
+    expect(result.ok || result.error).toContain('Gemini principal')
+    expect(result.ok || result.error).toContain('openrouter-vision-a')
+    expect(result.ok || result.error).toContain('openrouter-vision-b')
+    expect(result.ok || result.error).toContain('Gemini respaldo')
   })
 })

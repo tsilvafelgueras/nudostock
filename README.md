@@ -31,10 +31,12 @@ OPENROUTER_API_KEY=...
 # Opcionales
 GEMINI_MODEL=gemini-3.6-flash
 GEMINI_FALLBACK_MODEL=gemini-2.5-flash
-OPENROUTER_FALLBACK_MODEL=openrouter/free
+# Si se define, reemplaza la lista visual gratuita automática:
+# OPENROUTER_FALLBACK_MODEL=google/gemma-4-31b-it:free
 ```
 
 Si `OPENROUTER_API_KEY` no está configurada, la app usa el segundo modelo de Gemini
 como último recurso. Para tener redundancia real entre proveedores, ambas claves
 deben estar disponibles en el entorno del despliegue. `openrouter/free` no
-requiere saldo, aunque aplica límites bajos propios de los modelos gratuitos.
+se usa porque podía elegir modelos no aptos para OCR. Por defecto se prueban
+modelos visuales gratuitos fijos; siguen sujetos a límites de disponibilidad.

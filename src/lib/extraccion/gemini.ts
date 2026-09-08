@@ -243,7 +243,10 @@ export async function extraerConGemini(
           : {}),
         httpOptions: {
           timeout: Math.max(1_000, Math.floor(timeoutMs)),
-          retryOptions: { attempts: 1 },
+          // Un 503 es transitorio: el SDK aplica backoff dentro del mismo
+          // timeout total. Dos intentos mejoran disponibilidad sin bloquear la
+          // cadena de proveedores durante demasiado tiempo.
+          retryOptions: { attempts: 2 },
         },
       },
     })

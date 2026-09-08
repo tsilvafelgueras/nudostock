@@ -76,6 +76,7 @@ type CandidatoParcial = {
 const PRESUPUESTO_TOTAL_MS = 105_000
 const TIMEOUT_GEMINI_PRINCIPAL_MS = 45_000
 const TIMEOUT_OPENROUTER_MAX_MS = 75_000
+const TIMEOUT_OPENROUTER_POR_MODELO_MAX_MS = 45_000
 const TIMEOUT_GEMINI_FALLBACK_MAX_MS = 30_000
 const RESERVA_GEMINI_FALLBACK_MS = 15_000
 const TIMEOUT_MINIMO_INTENTO_MS = 8_000
@@ -211,20 +212,37 @@ export async function extraerPlanilla(
     const {
       archivoCompatibleConOpenRouter,
       extraerConOpenRouter,
-      modeloOpenRouterFallback,
+      modelosOpenRouterFallback,
     } = await import('./openrouter')
     if (archivoCompatibleConOpenRouter(mimeType)) {
-      const modeloOpenRouter = modeloOpenRouterFallback()
+      const modelosOpenRouter = modelosOpenRouterFallback()
       const reservaFallback = puedeUsarGeminiFallback
         ? RESERVA_GEMINI_FALLBACK_MS
         : 0
-      const timeoutOpenRouter = Math.min(
+      const presupuestoOpenRouter = Math.min(
         TIMEOUT_OPENROUTER_MAX_MS,
         Math.max(0, restante() - reservaFallback)
       )
-      if (timeoutOpenRouter >= TIMEOUT_MINIMO_INTENTO_MS) {
+      const deadlineOpenRouter = Date.now() + presupuestoOpenRouter
+
+      for (const modeloOpenRouter of modelosOpenRouter) {
+        const restanteOpenRouter = Math.min(
+          Math.max(0, deadlineOpenRouter - Date.now()),
+          Math.max(0, restante() - reservaFallback)
+        )
+        const timeoutOpenRouter = Math.min(
+          TIMEOUT_OPENROUTER_POR_MODELO_MAX_MS,
+          restanteOpenRouter
+        )
+        if (timeoutOpenRouter < TIMEOUT_MINIMO_INTENTO_MS) {
+          console.warn(
+            `[extraccion:${id}] OpenRouter ${modeloOpenRouter} omitido: presupuesto insuficiente restante_ms=${restante()}`
+          )
+          break
+        }
+
         console.warn(
-          `[extraccion:${id}] activando OpenRouter por ${resultadoPrincipal.ok ? 'EXTRACCION_INCOMPLETA' : resultadoPrincipal.codigo}; restante_ms=${restante()}`
+          `[extraccion:${id}] activando OpenRouter modelo=${modeloOpenRouter} por ${resultadoPrincipal.ok ? 'EXTRACCION_INCOMPLETA' : resultadoPrincipal.codigo}; restante_ms=${restante()}`
         )
         const resultadoOpenRouter = await ejecutarIntento(
           id,
@@ -238,7 +256,8 @@ export async function extraerPlanilla(
               fileBuffer,
               mimeType,
               customPrompt,
-              timeoutOpenRouter
+              timeoutOpenRouter,
+              modeloOpenRouter
             )
         )
         if (resultadoOpenRouter.ok) {
@@ -254,10 +273,6 @@ export async function extraerPlanilla(
         } else {
           registrarFallo('OpenRouter', modeloOpenRouter, resultadoOpenRouter)
         }
-      } else {
-        console.warn(
-          `[extraccion:${id}] OpenRouter omitido: presupuesto insuficiente restante_ms=${restante()}`
-        )
       }
     } else {
       console.warn(
@@ -340,10 +355,7 @@ export async function extraerPlanilla(
 
   const falloConcreto = [...fallos]
     .reverse()
-    .find(
-      ({ codigo }) =>
-        codigo === 'FORMATO_INVALIDO' || codigo === 'JSON_INVALID'
-    )
+    .find(({ codigo }) => codigo === 'FORMATO_INVALIDO')
   if (falloConcreto) {
     return {
       ok: false,

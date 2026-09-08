@@ -1753,7 +1753,7 @@ Cuando operario carga manualmente con el toggle "ya están en el depósito", el 
 | `OPENROUTER_API_KEY` | Vercel + .env.local | Respaldo gratuito independiente cuando Gemini falla |
 | `GEMINI_MODEL` | Vercel + .env.local (opcional) | Default: `gemini-3.6-flash` |
 | `GEMINI_FALLBACK_MODEL` | Vercel + .env.local (opcional) | Último recurso si OpenRouter no está disponible. Default: `gemini-2.5-flash` |
-| `OPENROUTER_FALLBACK_MODEL` | Vercel + .env.local (opcional) | Default gratuito: `openrouter/free` |
+| `OPENROUTER_FALLBACK_MODEL` | Vercel + .env.local (opcional) | Override de un único modelo. Sin definir, prueba `google/gemma-4-31b-it:free` y luego `dots-studio/dots-3-note-preview:free` |
 
 ### GitHub
 - Repo privado.

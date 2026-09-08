@@ -2,7 +2,10 @@ import type { ExtraccionResult } from './extraerPlanilla'
 import { buildPrompt } from './prompt'
 import { interpretarRespuestaIA } from './resultado'
 
-const MODELO_FALLBACK = 'openrouter/free'
+const MODELOS_FALLBACK = [
+  'google/gemma-4-31b-it:free',
+  'dots-studio/dots-3-note-preview:free',
+] as const
 const TIMEOUT_MS = 50_000
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
@@ -14,7 +17,12 @@ const MIMES_IMAGEN_OPENROUTER = new Set([
 ])
 
 export function modeloOpenRouterFallback(): string {
-  return process.env.OPENROUTER_FALLBACK_MODEL?.trim() || MODELO_FALLBACK
+  return modelosOpenRouterFallback()[0]
+}
+
+export function modelosOpenRouterFallback(): string[] {
+  const modeloConfigurado = process.env.OPENROUTER_FALLBACK_MODEL?.trim()
+  return modeloConfigurado ? [modeloConfigurado] : [...MODELOS_FALLBACK]
 }
 
 export function archivoCompatibleConOpenRouter(mimeType: string): boolean {
@@ -184,7 +192,8 @@ export async function extraerConOpenRouter(
   fileBuffer: Buffer,
   mimeType: string,
   customPrompt: string | null,
-  timeoutMs = TIMEOUT_MS
+  timeoutMs = TIMEOUT_MS,
+  modelo = modeloOpenRouterFallback()
 ): Promise<ExtraccionResult> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
@@ -202,7 +211,6 @@ export async function extraerConOpenRouter(
     }
   }
 
-  const modelo = modeloOpenRouterFallback()
   const dataUrl = `data:${mimeType};base64,${fileBuffer.toString('base64')}`
   const esPdf = mimeType === 'application/pdf'
   const archivo = esPdf
@@ -236,16 +244,18 @@ export async function extraerConOpenRouter(
     },
     max_tokens: 12_000,
     temperature: 0,
-    ...(esPdf
-      ? {
-          plugins: [
+    provider: { require_parameters: true },
+    plugins: [
+      ...(esPdf
+        ? [
             {
               id: 'file-parser',
               pdf: { engine: 'cloudflare-ai' },
             },
-          ],
-        }
-      : {}),
+          ]
+        : []),
+      { id: 'response-healing' },
+    ],
   }
 
   const t0 = Date.now()
@@ -275,10 +285,17 @@ export async function extraerConOpenRouter(
     console.info(
       `[extraccion] fallback ${response.model || modelo} respondió en ${Date.now() - t0}ms — tokens in:${response.usage?.prompt_tokens ?? '?'} out:${response.usage?.completion_tokens ?? '?'}`
     )
-    return interpretarRespuestaIA(
+    const resultado = interpretarRespuestaIA(
       contenidoRespuesta(response),
       'OPENROUTER_ERROR'
     )
+    if (!resultado.ok && resultado.codigo === 'JSON_INVALID') {
+      return {
+        ...resultado,
+        error: `${response.model || modelo} no devolvió JSON válido. ${resultado.error}`,
+      }
+    }
+    return resultado
   } catch (e) {
     const diagnostico = diagnosticarErrorOpenRouter(e)
     console.error(

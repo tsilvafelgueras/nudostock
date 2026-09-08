@@ -95,7 +95,7 @@ describe('extraerConGemini', () => {
     expect(request.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' })
     expect(request.config.httpOptions).toEqual({
       timeout: 50_000,
-      retryOptions: { attempts: 1 },
+      retryOptions: { attempts: 2 },
     })
   })
 
@@ -140,7 +140,7 @@ describe('extraerConGemini', () => {
     expect(result).toMatchObject({ ok: false, codigo: 'JSON_INVALID' })
   })
 
-  it('no reintenta errores permanentes del proveedor', async () => {
+  it('informa errores permanentes del proveedor', async () => {
     mocks.generateContent.mockRejectedValue(new Error('API key not valid'))
 
     const result = await extraerConGemini(Buffer.from('x'), 'image/jpeg', null)

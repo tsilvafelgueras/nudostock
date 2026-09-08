@@ -69,7 +69,7 @@ describe('extraerConOpenRouter', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(options.headers.Authorization).toBe('Bearer test-openrouter-key')
     const body = JSON.parse(options.body)
-    expect(body.model).toBe('openrouter/free')
+    expect(body.model).toBe('google/gemma-4-31b-it:free')
     expect(body.messages[0].content[0].text).toContain('PROMPT PARTICULAR')
     expect(body.messages[0].content[0].text).toContain(
       'CONTRATO UNIVERSAL DE EXTRACCIÓN'
@@ -86,7 +86,8 @@ describe('extraerConOpenRouter', () => {
     expect(body.response_format.json_schema.schema.additionalProperties).toBe(
       false
     )
-    expect(body.plugins).toBeUndefined()
+    expect(body.provider).toEqual({ require_parameters: true })
+    expect(body.plugins).toEqual([{ id: 'response-healing' }])
   })
 
   it('procesa PDF con el parser gratuito de Cloudflare', async () => {
@@ -102,6 +103,7 @@ describe('extraerConOpenRouter', () => {
     })
     expect(body.plugins).toEqual([
       { id: 'file-parser', pdf: { engine: 'cloudflare-ai' } },
+      { id: 'response-healing' },
     ])
   })
 
@@ -177,5 +179,39 @@ describe('extraerConOpenRouter', () => {
     )
 
     expect(timeoutSpy).toHaveBeenCalledWith(67_890)
+  })
+
+  it('permite fijar un modelo visual gratuito concreto', async () => {
+    await extraerConOpenRouter(
+      Buffer.from('x'),
+      'image/jpeg',
+      null,
+      20_000,
+      'dots-studio/dots-3-note-preview:free'
+    )
+
+    const body = JSON.parse(mocks.fetch.mock.calls[0][1].body)
+    expect(body.model).toBe('dots-studio/dots-3-note-preview:free')
+  })
+
+  it('identifica el modelo que devolvió una respuesta no JSON', async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        model: 'cohere/north-mini-code:free',
+        choices: [{ message: { content: 'No tengo acceso al documento' } }],
+        usage: {},
+      }),
+    })
+
+    const result = await extraerConOpenRouter(
+      Buffer.from('x'),
+      'image/jpeg',
+      null
+    )
+
+    expect(result).toMatchObject({ ok: false, codigo: 'JSON_INVALID' })
+    expect(result.ok || result.error).toContain('cohere/north-mini-code:free')
   })
 })
