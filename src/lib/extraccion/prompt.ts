@@ -1,5 +1,5 @@
-// Prompt compartido por todos los proveedores de IA. Las instrucciones
-// específicas de cada tintorería se agregan al final cuando están definidas.
+// Contrato compartido por todos los proveedores. Las instrucciones específicas
+// de cada tintorería son únicamente pistas adicionales de layout y alias.
 
 const PROMPT_BASE = `
 Sos un asistente experto en procesar planillas de remitos de tintorerías textiles argentinas.
@@ -18,8 +18,18 @@ Ejemplos obligatorios:
 Devolvé el JSON directamente. No agregues explicaciones ni texto adicional fuera del JSON.
 `.trim()
 
-const DEFAULT_INSTRUCTIONS = `
-La planilla es un remito de una tintorería textil argentina. Extraé los datos en formato JSON.
+const UNIVERSAL_INSTRUCTIONS = `
+# CONTRATO UNIVERSAL DE EXTRACCIÓN
+
+La app necesita recibir todos los datos visibles del remito en el JSON definido por el schema.
+
+# INTEGRIDAD DE LOS ROLLOS — REGLA CRÍTICA
+
+- Recorré la planilla completa antes de responder: de arriba abajo y de izquierda a derecha.
+- Extraé UN objeto dentro de \`rollos\` por cada rollo o pieza física de la planilla. No devuelvas ejemplos, muestras, resúmenes ni solamente la primera fila.
+- Una planilla puede distribuir los rollos en varios bloques de columnas paralelos, varias tablas, secciones repetidas o páginas. Todos esos bloques son continuación del mismo listado y deben incluirse.
+- Si \`total_rollos_declarado\` indica N, verificá antes de responder que \`rollos\` tenga N elementos. Si faltan, volvé a recorrer todos los bloques y páginas para incorporarlos.
+- No inventes filas para completar N: si una fila es parcialmente ilegible, incluí igualmente el rollo con los campos visibles y usá \`null\` más confianza 0 para lo que no pueda leerse.
 
 # HEADER (datos del lote/despacho, uno solo)
 
@@ -56,6 +66,10 @@ Devolvé solo el JSON. No agregues texto adicional.
 `.trim()
 
 export function buildPrompt(customPrompt: string | null): string {
-  const instrucciones = customPrompt?.trim() || DEFAULT_INSTRUCTIONS
-  return `${PROMPT_BASE}\n\n${instrucciones}`
+  const pistasTintoreria = customPrompt?.trim()
+  const pistas = pistasTintoreria
+    ? `\n\n# PISTAS DE LAYOUT Y ALIAS DE ESTA TINTORERÍA\n\nEstas pistas complementan el contrato universal anterior y nunca lo reemplazan:\n\n${pistasTintoreria}`
+    : ''
+
+  return `${PROMPT_BASE}\n\n${UNIVERSAL_INSTRUCTIONS}${pistas}`
 }

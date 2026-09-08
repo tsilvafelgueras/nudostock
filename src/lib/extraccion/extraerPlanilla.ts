@@ -63,6 +63,14 @@ type IntentoFallido = ResultadoFallido & {
   modelo: string
 }
 
+type ResultadoExitoso = Extract<ExtraccionResult, { ok: true }>
+
+type CandidatoParcial = {
+  proveedor: string
+  modelo: string
+  resultado: ResultadoExitoso
+}
+
 // La Server Action dispone de 120 s. Reservamos 15 s para descargar el archivo,
 // serializar la respuesta y cualquier latencia de la plataforma.
 const PRESUPUESTO_TOTAL_MS = 105_000
@@ -103,9 +111,8 @@ async function ejecutarIntento(
  *
  * @param fileBuffer Buffer del archivo
  * @param mimeType MIME type del archivo
- * @param customPrompt Prompt custom de la tintorería (campo
- *   `tintorerias.extraction_prompt` en DB). Si es null/vacío, se usa el
- *   prompt default genérico definido en `./prompt.ts`.
+ * @param customPrompt Pistas de layout y alias de la tintorería (campo
+ *   `tintorerias.extraction_prompt` en DB), agregadas al contrato universal.
  *
  * Gemini es el proveedor principal, OpenRouter es el respaldo independiente y
  * el segundo modelo de Gemini queda como tercer y último intento. Los tres
@@ -126,12 +133,35 @@ export async function extraerPlanilla(
   const deadline = inicio + PRESUPUESTO_TOTAL_MS
   const id = idExtraccion()
   const fallos: IntentoFallido[] = []
+  const candidatosParciales: CandidatoParcial[] = []
+  let mayorTotalDeclarado = 0
   const restante = () => Math.max(0, deadline - Date.now())
   const registrarFallo = (
     proveedor: string,
     modelo: string,
     resultado: ResultadoFallido
   ) => fallos.push({ proveedor, modelo, ...resultado })
+  const aceptarORegistrarParcial = (
+    proveedor: string,
+    modelo: string,
+    resultado: ResultadoExitoso
+  ): boolean => {
+    const total = resultado.data.total_rollos_declarado.value
+    if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
+      mayorTotalDeclarado = Math.max(mayorTotalDeclarado, Math.floor(total))
+    }
+
+    const extraidos = resultado.data.rollos.length
+    if (mayorTotalDeclarado > 0 && extraidos < mayorTotalDeclarado) {
+      candidatosParciales.push({ proveedor, modelo, resultado })
+      console.warn(
+        `[extraccion:${id}] resultado incompleto proveedor=${proveedor} modelo=${modelo} declarados=${mayorTotalDeclarado} extraidos=${extraidos}; continuando fallback`
+      )
+      return false
+    }
+
+    return true
+  }
 
   console.info(
     `[extraccion:${id}] solicitud mime=${mimeType} bytes=${fileBuffer.byteLength} presupuesto_ms=${PRESUPUESTO_TOTAL_MS}`
@@ -158,8 +188,19 @@ export async function extraerPlanilla(
         timeoutPrincipal
       )
   )
-  if (resultadoPrincipal.ok) return resultadoPrincipal
-  registrarFallo('Gemini principal', modeloPrincipal, resultadoPrincipal)
+  if (resultadoPrincipal.ok) {
+    if (
+      aceptarORegistrarParcial(
+        'Gemini principal',
+        modeloPrincipal,
+        resultadoPrincipal
+      )
+    ) {
+      return resultadoPrincipal
+    }
+  } else {
+    registrarFallo('Gemini principal', modeloPrincipal, resultadoPrincipal)
+  }
 
   const modeloFallback = modeloGeminiFallback()
   const puedeUsarGeminiFallback =
@@ -183,7 +224,7 @@ export async function extraerPlanilla(
       )
       if (timeoutOpenRouter >= TIMEOUT_MINIMO_INTENTO_MS) {
         console.warn(
-          `[extraccion:${id}] activando OpenRouter por ${resultadoPrincipal.codigo}; restante_ms=${restante()}`
+          `[extraccion:${id}] activando OpenRouter por ${resultadoPrincipal.ok ? 'EXTRACCION_INCOMPLETA' : resultadoPrincipal.codigo}; restante_ms=${restante()}`
         )
         const resultadoOpenRouter = await ejecutarIntento(
           id,
@@ -200,8 +241,19 @@ export async function extraerPlanilla(
               timeoutOpenRouter
             )
         )
-        if (resultadoOpenRouter.ok) return resultadoOpenRouter
-        registrarFallo('OpenRouter', modeloOpenRouter, resultadoOpenRouter)
+        if (resultadoOpenRouter.ok) {
+          if (
+            aceptarORegistrarParcial(
+              'OpenRouter',
+              modeloOpenRouter,
+              resultadoOpenRouter
+            )
+          ) {
+            return resultadoOpenRouter
+          }
+        } else {
+          registrarFallo('OpenRouter', modeloOpenRouter, resultadoOpenRouter)
+        }
       } else {
         console.warn(
           `[extraccion:${id}] OpenRouter omitido: presupuesto insuficiente restante_ms=${restante()}`
@@ -239,8 +291,19 @@ export async function extraerPlanilla(
             timeoutFallback
           )
       )
-      if (resultadoFallback.ok) return resultadoFallback
-      registrarFallo('Gemini respaldo', modeloFallback, resultadoFallback)
+      if (resultadoFallback.ok) {
+        if (
+          aceptarORegistrarParcial(
+            'Gemini respaldo',
+            modeloFallback,
+            resultadoFallback
+          )
+        ) {
+          return resultadoFallback
+        }
+      } else {
+        registrarFallo('Gemini respaldo', modeloFallback, resultadoFallback)
+      }
     } else {
       console.warn(
         `[extraccion:${id}] Gemini de respaldo omitido: presupuesto insuficiente restante_ms=${restante()}`
@@ -249,6 +312,7 @@ export async function extraerPlanilla(
   }
 
   if (
+    !resultadoPrincipal.ok &&
     resultadoPrincipal.codigo === 'NO_API_KEY' &&
     !process.env.OPENROUTER_API_KEY?.trim()
   ) {
@@ -258,6 +322,18 @@ export async function extraerPlanilla(
       error:
         'No hay ningún proveedor de IA configurado. Falta GEMINI_API_KEY u OPENROUTER_API_KEY.',
     }
+  }
+
+  if (candidatosParciales.length > 0) {
+    const mejorCandidato = candidatosParciales.reduce((mejor, candidato) =>
+      candidato.resultado.data.rollos.length > mejor.resultado.data.rollos.length
+        ? candidato
+        : mejor
+    )
+    console.warn(
+      `[extraccion:${id}] devolviendo mejor resultado parcial proveedor=${mejorCandidato.proveedor} modelo=${mejorCandidato.modelo} extraidos=${mejorCandidato.resultado.data.rollos.length} declarados=${mayorTotalDeclarado}`
+    )
+    return mejorCandidato.resultado
   }
 
   if (fallos.length === 1) return resultadoPrincipal

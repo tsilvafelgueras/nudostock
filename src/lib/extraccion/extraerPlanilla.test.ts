@@ -52,6 +52,24 @@ const timeout: ExtraccionResult = {
   error: 'proveedor tardó demasiado',
 }
 
+function exitoConCantidad(
+  declarados: number,
+  extraidos: number
+): Extract<ExtraccionResult, { ok: true }> {
+  if (!exito.ok) throw new Error('Fixture inválido')
+  return {
+    ok: true,
+    data: {
+      ...exito.data,
+      total_rollos_declarado: { value: declarados, confidence: 1 },
+      rollos: Array.from({ length: extraidos }, (_, index) => ({
+        ...exito.data.rollos[0],
+        numero_pieza: { value: `P-${index + 1}`, confidence: 1 },
+      })),
+    },
+  }
+}
+
 describe('extraerPlanilla', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -106,6 +124,51 @@ describe('extraerPlanilla', () => {
     expect(mocks.openrouter.mock.calls[0][3]).toBeGreaterThan(50_000)
     expect(mocks.openrouter.mock.calls[0][3]).toBeLessThanOrEqual(75_000)
     expect(mocks.gemini.mock.calls[1][4]).toBeLessThanOrEqual(30_000)
+  })
+
+  it('continúa al siguiente proveedor si recibe menos rollos que los declarados', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    const parcial = exitoConCantidad(24, 1)
+    const completo = exitoConCantidad(24, 24)
+    mocks.gemini.mockResolvedValue(parcial)
+    mocks.openrouter.mockResolvedValue(completo)
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(completo)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
+    expect(mocks.gemini).toHaveBeenCalledTimes(1)
+  })
+
+  it('llega a Gemini de respaldo si OpenRouter devuelve una extracción parcial', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    const parcial = exitoConCantidad(24, 1)
+    const completo = exitoConCantidad(24, 24)
+    mocks.gemini.mockResolvedValueOnce(timeout).mockResolvedValueOnce(completo)
+    mocks.openrouter.mockResolvedValue(parcial)
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(completo)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
+  })
+
+  it('conserva el resultado parcial con más rollos si ninguno queda completo', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    const parcialGemini = exitoConCantidad(24, 1)
+    const mejorParcial = exitoConCantidad(24, 12)
+    const parcialFallback = exitoConCantidad(24, 8)
+    mocks.gemini
+      .mockResolvedValueOnce(parcialGemini)
+      .mockResolvedValueOnce(parcialFallback)
+    mocks.openrouter.mockResolvedValue(mejorParcial)
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(mejorParcial)
+    expect(result.ok && result.data.rollos).toHaveLength(12)
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
   })
 
   it('usa el segundo Gemini sólo cuando OpenRouter no está configurado', async () => {

@@ -71,6 +71,10 @@ describe('extraerConOpenRouter', () => {
     const body = JSON.parse(options.body)
     expect(body.model).toBe('openrouter/free')
     expect(body.messages[0].content[0].text).toContain('PROMPT PARTICULAR')
+    expect(body.messages[0].content[0].text).toContain(
+      'CONTRATO UNIVERSAL DE EXTRACCIÓN'
+    )
+    expect(body.messages[0].content[0].text).toContain('POR CADA ROLLO')
     expect(body.messages[0].content[1]).toEqual({
       type: 'image_url',
       image_url: { url: 'data:image/png;base64,AAEC' },

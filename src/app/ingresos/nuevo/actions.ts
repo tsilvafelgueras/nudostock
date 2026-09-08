@@ -185,9 +185,10 @@ export async function prepararSubidaPlanilla(input: {
 }
 
 /**
- * Procesa una planilla con IA aplicando el prompt custom de la tintorería
- * elegida. El archivo ya está en Storage: la acción recibe solo el path para
- * no quedar limitada por el body máximo de Server Actions/Vercel.
+ * Procesa una planilla con IA aplicando el contrato universal y las pistas de
+ * layout/alias de la tintorería elegida. El archivo ya está en Storage: la
+ * acción recibe solo el path para no quedar limitada por el body máximo de
+ * Server Actions/Vercel.
  */
 export async function procesarPlanillaConIA(
   input: ProcesarPlanillaInput

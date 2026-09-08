@@ -83,6 +83,13 @@ describe('extraerConGemini', () => {
     expect(request.contents[0].parts[1].text).toContain(
       'INSTRUCCION PARTICULAR DE PRUEBA'
     )
+    expect(request.contents[0].parts[1].text).toContain(
+      'CONTRATO UNIVERSAL DE EXTRACCIÓN'
+    )
+    expect(request.contents[0].parts[1].text).toContain(
+      'Estas pistas complementan el contrato universal'
+    )
+    expect(request.contents[0].parts[1].text).toContain('POR CADA ROLLO')
     expect(request.config.responseMimeType).toBe('application/json')
     expect(request.config.responseSchema).toBeDefined()
     expect(request.config.thinkingConfig).toEqual({ thinkingLevel: 'LOW' })
