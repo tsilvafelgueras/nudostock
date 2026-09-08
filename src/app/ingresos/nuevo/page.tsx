@@ -4,7 +4,7 @@ import BackButton from '@/components/BackButton'
 import { getUbicacionesActivas } from '@/lib/ubicacionesServer'
 import NuevoIngresoForm from './NuevoIngresoForm'
 
-// La extracción usa un proveedor multimodal y puede hacer fallback una vez.
+// La extracción usa proveedores multimodales y puede hacer dos fallbacks.
 // Next propaga este límite a las Server Actions invocadas desde la página.
 export const maxDuration = 120
 

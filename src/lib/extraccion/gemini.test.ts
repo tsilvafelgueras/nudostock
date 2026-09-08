@@ -195,4 +195,23 @@ describe('extraerConGemini', () => {
     )
     expect(mocks.generateContent.mock.calls[1][0].model).toBe('gemini-explicito')
   })
+
+  it('acepta un timeout definido por el orquestador', async () => {
+    mocks.generateContent.mockResolvedValue({
+      text: JSON.stringify(respuestaValida),
+      usageMetadata: {},
+    })
+
+    await extraerConGemini(
+      Buffer.from('remito'),
+      'image/jpeg',
+      null,
+      'gemini-explicito',
+      12_345
+    )
+
+    expect(
+      mocks.generateContent.mock.calls[0][0].config.httpOptions.timeout
+    ).toBe(12_345)
+  })
 })

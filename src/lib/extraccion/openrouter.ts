@@ -183,7 +183,8 @@ function contenidoRespuesta(response: OpenRouterResponse): string | null {
 export async function extraerConOpenRouter(
   fileBuffer: Buffer,
   mimeType: string,
-  customPrompt: string | null
+  customPrompt: string | null,
+  timeoutMs = TIMEOUT_MS
 ): Promise<ExtraccionResult> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
@@ -258,7 +259,7 @@ export async function extraerConOpenRouter(
         'X-OpenRouter-Title': 'Nudo Stock',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.max(1_000, Math.floor(timeoutMs))),
     })
     const response = (await httpResponse.json()) as OpenRouterResponse
     if (!httpResponse.ok || response.error) {

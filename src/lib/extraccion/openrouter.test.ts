@@ -158,4 +158,20 @@ describe('extraerConOpenRouter', () => {
 
     expect(result).toMatchObject({ ok: false, codigo: 'AI_TIMEOUT' })
   })
+
+  it('acepta el tiempo restante definido por el orquestador', async () => {
+    const signal = new AbortController().signal
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockReturnValue(signal)
+
+    await extraerConOpenRouter(
+      Buffer.from('x'),
+      'image/jpeg',
+      null,
+      67_890
+    )
+
+    expect(timeoutSpy).toHaveBeenCalledWith(67_890)
+  })
 })

@@ -16,6 +16,7 @@ vi.mock('./gemini', () => ({
 vi.mock('./openrouter', () => ({
   extraerConOpenRouter: mocks.openrouter,
   archivoCompatibleConOpenRouter: mocks.compatible,
+  modeloOpenRouterFallback: () => 'openrouter-gratis',
 }))
 
 import { extraerPlanilla } from './extraerPlanilla'
@@ -86,6 +87,27 @@ describe('extraerPlanilla', () => {
     expect(mocks.openrouter).toHaveBeenCalledTimes(1)
   })
 
+  it('prueba el segundo Gemini si también falla OpenRouter', async () => {
+    process.env.OPENROUTER_API_KEY = 'openrouter-key'
+    mocks.gemini.mockResolvedValueOnce(timeout).mockResolvedValueOnce(exito)
+    mocks.openrouter.mockResolvedValue({
+      ok: false,
+      codigo: 'AI_UNAVAILABLE',
+      error: 'OpenRouter no disponible',
+    })
+
+    const result = await extraerPlanilla(Buffer.from('x'), 'image/png', null)
+
+    expect(result).toBe(exito)
+    expect(mocks.openrouter).toHaveBeenCalledTimes(1)
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
+    expect(mocks.gemini.mock.calls[1][3]).toBe('gemini-respaldo')
+    expect(mocks.gemini.mock.calls[0][4]).toBeLessThanOrEqual(45_000)
+    expect(mocks.openrouter.mock.calls[0][3]).toBeGreaterThan(50_000)
+    expect(mocks.openrouter.mock.calls[0][3]).toBeLessThanOrEqual(75_000)
+    expect(mocks.gemini.mock.calls[1][4]).toBeLessThanOrEqual(30_000)
+  })
+
   it('usa el segundo Gemini sólo cuando OpenRouter no está configurado', async () => {
     mocks.gemini.mockResolvedValueOnce(timeout).mockResolvedValueOnce(exito)
 
@@ -109,7 +131,7 @@ describe('extraerPlanilla', () => {
     expect(mocks.gemini).toHaveBeenCalledTimes(2)
   })
 
-  it('explica cuando fallan ambos proveedores', async () => {
+  it('explica los tres intentos cuando todos fallan', async () => {
     process.env.OPENROUTER_API_KEY = 'openrouter-key'
     mocks.gemini.mockResolvedValue(timeout)
     mocks.openrouter.mockResolvedValue({
@@ -126,5 +148,7 @@ describe('extraerPlanilla', () => {
     })
     expect(result.ok || result.error).toContain('Gemini')
     expect(result.ok || result.error).toContain('OpenRouter')
+    expect(result.ok || result.error).toContain('gemini-respaldo')
+    expect(mocks.gemini).toHaveBeenCalledTimes(2)
   })
 })

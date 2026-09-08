@@ -41,7 +41,7 @@ export type IngresoExtraido = {
 export type CodigoErrorExtraccion =
   | 'GEMINI_ERROR' // falla técnica no clasificada de Gemini
   | 'OPENROUTER_ERROR' // falla técnica no clasificada de OpenRouter
-  | 'AI_ALL_PROVIDERS_FAILED' // fallaron el proveedor principal y el alternativo
+  | 'AI_ALL_PROVIDERS_FAILED' // fallaron todos los intentos disponibles
   | 'AI_QUOTA_EXCEEDED' // cuota/rate-limit del proveedor (429)
   | 'AI_OVERLOADED' // capacidad temporal del proveedor (503)
   | 'AI_TIMEOUT' // el proveedor no respondió dentro del límite local
@@ -56,6 +56,47 @@ export type ExtraccionResult =
   | { ok: true; data: IngresoExtraido }
   | { ok: false; error: string; codigo: CodigoErrorExtraccion }
 
+type ResultadoFallido = Extract<ExtraccionResult, { ok: false }>
+
+type IntentoFallido = ResultadoFallido & {
+  proveedor: string
+  modelo: string
+}
+
+// La Server Action dispone de 120 s. Reservamos 15 s para descargar el archivo,
+// serializar la respuesta y cualquier latencia de la plataforma.
+const PRESUPUESTO_TOTAL_MS = 105_000
+const TIMEOUT_GEMINI_PRINCIPAL_MS = 45_000
+const TIMEOUT_OPENROUTER_MAX_MS = 75_000
+const TIMEOUT_GEMINI_FALLBACK_MAX_MS = 30_000
+const RESERVA_GEMINI_FALLBACK_MS = 15_000
+const TIMEOUT_MINIMO_INTENTO_MS = 8_000
+
+function idExtraccion(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+async function ejecutarIntento(
+  id: string,
+  proveedor: string,
+  modelo: string,
+  timeoutMs: number,
+  fileBuffer: Buffer,
+  mimeType: string,
+  ejecutar: () => Promise<ExtraccionResult>
+): Promise<ExtraccionResult> {
+  const inicio = Date.now()
+  console.info(
+    `[extraccion:${id}] inicio proveedor=${proveedor} modelo=${modelo} mime=${mimeType} bytes=${fileBuffer.byteLength} timeout_ms=${timeoutMs}`
+  )
+  const resultado = await ejecutar()
+  const detalle = resultado.ok ? 'ok=true' : `ok=false codigo=${resultado.codigo}`
+  console.info(
+    `[extraccion:${id}] fin proveedor=${proveedor} modelo=${modelo} duracion_ms=${Date.now() - inicio} ${detalle}`
+  )
+  return resultado
+}
+
 /**
  * Procesa una imagen (JPG/PNG) o PDF de planilla y devuelve los datos
  * estructurados con confianza por campo.
@@ -66,9 +107,9 @@ export type ExtraccionResult =
  *   `tintorerias.extraction_prompt` en DB). Si es null/vacío, se usa el
  *   prompt default genérico definido en `./prompt.ts`.
  *
- * Gemini es el proveedor principal. OpenRouter es el respaldo independiente; si
- * no está configurado o el formato no es compatible (HEIC/HEIF), se conserva
- * el segundo modelo de Gemini como último recurso.
+ * Gemini es el proveedor principal, OpenRouter es el respaldo independiente y
+ * el segundo modelo de Gemini queda como tercer y último intento. Los tres
+ * comparten un presupuesto de tiempo menor al límite de la Server Action.
  */
 export async function extraerPlanilla(
   fileBuffer: Buffer,
@@ -81,61 +122,130 @@ export async function extraerPlanilla(
     modeloGeminiPrincipal,
   } = await import('./gemini')
 
+  const inicio = Date.now()
+  const deadline = inicio + PRESUPUESTO_TOTAL_MS
+  const id = idExtraccion()
+  const fallos: IntentoFallido[] = []
+  const restante = () => Math.max(0, deadline - Date.now())
+  const registrarFallo = (
+    proveedor: string,
+    modelo: string,
+    resultado: ResultadoFallido
+  ) => fallos.push({ proveedor, modelo, ...resultado })
+
+  console.info(
+    `[extraccion:${id}] solicitud mime=${mimeType} bytes=${fileBuffer.byteLength} presupuesto_ms=${PRESUPUESTO_TOTAL_MS}`
+  )
+
   const modeloPrincipal = modeloGeminiPrincipal()
-  const resultadoPrincipal = await extraerConGemini(
+  const timeoutPrincipal = Math.min(
+    TIMEOUT_GEMINI_PRINCIPAL_MS,
+    restante()
+  )
+  const resultadoPrincipal = await ejecutarIntento(
+    id,
+    'gemini',
+    modeloPrincipal,
+    timeoutPrincipal,
     fileBuffer,
     mimeType,
-    customPrompt,
-    modeloPrincipal
-  )
-  if (resultadoPrincipal.ok) return resultadoPrincipal
-
-  if (process.env.OPENROUTER_API_KEY?.trim()) {
-    const { archivoCompatibleConOpenRouter, extraerConOpenRouter } = await import(
-      './openrouter'
-    )
-    if (archivoCompatibleConOpenRouter(mimeType)) {
-      console.warn(
-        `[extraccion] activando fallback OpenRouter por ${resultadoPrincipal.codigo}`
-      )
-      const resultadoOpenRouter = await extraerConOpenRouter(
+    () =>
+      extraerConGemini(
         fileBuffer,
         mimeType,
-        customPrompt
+        customPrompt,
+        modeloPrincipal,
+        timeoutPrincipal
       )
-      if (resultadoOpenRouter.ok) return resultadoOpenRouter
+  )
+  if (resultadoPrincipal.ok) return resultadoPrincipal
+  registrarFallo('Gemini principal', modeloPrincipal, resultadoPrincipal)
 
-      // Si ambos proveedores coincidieron en que el archivo no era una
-      // planilla o la respuesta era inválida, devolvemos el diagnóstico más
-      // concreto. Para dos fallas técnicas, explicitamos que fallaron ambos.
-      if (
-        resultadoOpenRouter.codigo === 'FORMATO_INVALIDO' ||
-        resultadoOpenRouter.codigo === 'JSON_INVALID'
-      ) {
-        return resultadoOpenRouter
+  const modeloFallback = modeloGeminiFallback()
+  const puedeUsarGeminiFallback =
+    Boolean(process.env.GEMINI_API_KEY?.trim()) &&
+    modeloFallback !== modeloPrincipal
+
+  if (process.env.OPENROUTER_API_KEY?.trim()) {
+    const {
+      archivoCompatibleConOpenRouter,
+      extraerConOpenRouter,
+      modeloOpenRouterFallback,
+    } = await import('./openrouter')
+    if (archivoCompatibleConOpenRouter(mimeType)) {
+      const modeloOpenRouter = modeloOpenRouterFallback()
+      const reservaFallback = puedeUsarGeminiFallback
+        ? RESERVA_GEMINI_FALLBACK_MS
+        : 0
+      const timeoutOpenRouter = Math.min(
+        TIMEOUT_OPENROUTER_MAX_MS,
+        Math.max(0, restante() - reservaFallback)
+      )
+      if (timeoutOpenRouter >= TIMEOUT_MINIMO_INTENTO_MS) {
+        console.warn(
+          `[extraccion:${id}] activando OpenRouter por ${resultadoPrincipal.codigo}; restante_ms=${restante()}`
+        )
+        const resultadoOpenRouter = await ejecutarIntento(
+          id,
+          'openrouter',
+          modeloOpenRouter,
+          timeoutOpenRouter,
+          fileBuffer,
+          mimeType,
+          () =>
+            extraerConOpenRouter(
+              fileBuffer,
+              mimeType,
+              customPrompt,
+              timeoutOpenRouter
+            )
+        )
+        if (resultadoOpenRouter.ok) return resultadoOpenRouter
+        registrarFallo('OpenRouter', modeloOpenRouter, resultadoOpenRouter)
+      } else {
+        console.warn(
+          `[extraccion:${id}] OpenRouter omitido: presupuesto insuficiente restante_ms=${restante()}`
+        )
       }
-      return {
-        ok: false,
-        codigo: 'AI_ALL_PROVIDERS_FAILED',
-        error: `No se pudo procesar la planilla con ninguno de los proveedores. Gemini: ${resultadoPrincipal.error} OpenRouter: ${resultadoOpenRouter.error}`,
-      }
+    } else {
+      console.warn(
+        `[extraccion:${id}] OpenRouter omitido: mime no compatible (${mimeType})`
+      )
     }
   }
 
-  const modeloFallback = modeloGeminiFallback()
-  if (
-    process.env.GEMINI_API_KEY?.trim() &&
-    modeloFallback !== modeloPrincipal
-  ) {
-    console.warn(
-      `[extraccion] OpenRouter no disponible para ${mimeType}; probando ${modeloFallback}`
+  if (puedeUsarGeminiFallback) {
+    const timeoutFallback = Math.min(
+      TIMEOUT_GEMINI_FALLBACK_MAX_MS,
+      restante()
     )
-    return extraerConGemini(
-      fileBuffer,
-      mimeType,
-      customPrompt,
-      modeloFallback
-    )
+    if (timeoutFallback >= TIMEOUT_MINIMO_INTENTO_MS) {
+      console.warn(
+        `[extraccion:${id}] activando Gemini de respaldo; restante_ms=${restante()}`
+      )
+      const resultadoFallback = await ejecutarIntento(
+        id,
+        'gemini',
+        modeloFallback,
+        timeoutFallback,
+        fileBuffer,
+        mimeType,
+        () =>
+          extraerConGemini(
+            fileBuffer,
+            mimeType,
+            customPrompt,
+            modeloFallback,
+            timeoutFallback
+          )
+      )
+      if (resultadoFallback.ok) return resultadoFallback
+      registrarFallo('Gemini respaldo', modeloFallback, resultadoFallback)
+    } else {
+      console.warn(
+        `[extraccion:${id}] Gemini de respaldo omitido: presupuesto insuficiente restante_ms=${restante()}`
+      )
+    }
   }
 
   if (
@@ -150,7 +260,34 @@ export async function extraerPlanilla(
     }
   }
 
-  return resultadoPrincipal
+  if (fallos.length === 1) return resultadoPrincipal
+
+  const falloConcreto = [...fallos]
+    .reverse()
+    .find(
+      ({ codigo }) =>
+        codigo === 'FORMATO_INVALIDO' || codigo === 'JSON_INVALID'
+    )
+  if (falloConcreto) {
+    return {
+      ok: false,
+      codigo: falloConcreto.codigo,
+      error: falloConcreto.error,
+    }
+  }
+
+  const diagnostico = fallos
+    .map(
+      ({ proveedor, modelo, error }) =>
+        `${proveedor} (${modelo}): ${error}`
+    )
+    .join(' | ')
+
+  return {
+    ok: false,
+    codigo: 'AI_ALL_PROVIDERS_FAILED',
+    error: `No se pudo procesar la planilla con ninguno de los intentos. ${diagnostico}`,
+  }
 }
 
 /**

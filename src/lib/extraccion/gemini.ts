@@ -200,7 +200,8 @@ export async function extraerConGemini(
   fileBuffer: Buffer,
   mimeType: string,
   customPrompt: string | null,
-  modelo = modeloGeminiPrincipal()
+  modelo = modeloGeminiPrincipal(),
+  timeoutMs = TIMEOUT_MS
 ): Promise<ExtraccionResult> {
   const apiKey = process.env.GEMINI_API_KEY
   if (!apiKey) {
@@ -241,7 +242,7 @@ export async function extraerConGemini(
           ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
           : {}),
         httpOptions: {
-          timeout: TIMEOUT_MS,
+          timeout: Math.max(1_000, Math.floor(timeoutMs)),
           retryOptions: { attempts: 1 },
         },
       },
